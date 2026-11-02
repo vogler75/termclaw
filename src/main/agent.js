@@ -33,7 +33,7 @@ class AgentSession extends BaseSession {
     this.client = null;
     this.server = null;
     this.log = [];
-    this.start();
+    if (this.disconnected) this.status = 'disconnected'; else this.start();
   }
 
   _log(line) {
@@ -69,6 +69,7 @@ class AgentSession extends BaseSession {
       this._log('connected to OpenCode at ' + this.client.url);
       await this.refreshModel();
     } catch (e) {
+      if (this.disconnected) return;
       this.error = e.message;
       this._log('error: ' + e.message);
       this.setStatus('error', e.message);
@@ -85,7 +86,7 @@ class AgentSession extends BaseSession {
       const bin = findOpencode(this.mgr.store.settings.opencodePath || (agentCmd !== 'opencode' ? agentCmd : ''));
       const cwd = dir ? dir.replace(/^~(?=$|[\\/])/, os.homedir()) : os.homedir();
       this.server = new LocalOpenCodeServer({ bin, cwd });
-      this.server.on('exit', (code) => { this._log('opencode exited ' + code); this.setStatus('error', 'OpenCode exited'); });
+      this.server.on('exit', (code) => { this._log('opencode exited ' + code); if (!this._closed) this.setStatus('error', 'OpenCode exited'); });
       this.client = await this.server.start();
       return;
     }
@@ -256,7 +257,15 @@ class AgentSession extends BaseSession {
   reconnect() {
     this.close({ keep: true });
     this._closed = false;
+    this.disconnected = false;
     this.start();
+  }
+
+  // The OpenCode server keeps running in tmux on the target; reconnect() attaches again.
+  disconnect() {
+    if (this.disconnected) return;
+    this.close();
+    this._setDisconnected();
   }
 
   // Current model of this OpenCode session (falls back to the server default).

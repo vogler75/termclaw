@@ -322,7 +322,16 @@ const api = {
   setSessionFlags: (id, flags) => sessions.setFlags(id, flags),
   write: (id, data) => { const s = sessions.get(id); if (s) s.write(data); },
   resize: (id, cols, rows) => { const s = sessions.get(id); if (s) s.resize(cols, rows); },
-  reconnect: (id) => { const s = sessions.get(id); if (s) s.reconnect(); },
+  reconnect: (id) => sessions.reconnect(id),
+  disconnect: (id) => sessions.disconnect(id),
+  // All sessions of a project; the Docker / Monitor / Git connections are closed as well.
+  disconnectProject: (id) => {
+    sessions.disconnectProject(id);
+    docker.reset(id);
+    monitor.reset(id);
+    git.reset(id);
+  },
+  reconnectProject: (id) => sessions.reconnectProject(id),
   serialize: (id) => { const s = sessions.get(id); return s && s.serialize ? s.serialize() : ''; },
   setActive: (id) => { activeSessionId = id; },
   runCommand: async (id, command) => { const s = sessions.get(id); if (s) await s.send(command); },

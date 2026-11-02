@@ -306,8 +306,8 @@ class McpService extends EventEmitter {
     });
 
     const waitIdle = (s, timeoutSec, signal) => new Promise((resolve) => {
-      if (s.status === 'waiting' || s.status === 'exited' || s.status === 'error') return resolve({ status: s.status, timed_out: false });
-      const onStatus = (x) => { if (x === s && (x.status === 'waiting' || x.status === 'exited' || x.status === 'error')) finish(false); };
+      if (s.status === 'waiting' || s.status === 'exited' || s.status === 'error' || s.status === 'disconnected') return resolve({ status: s.status, timed_out: false });
+      const onStatus = (x) => { if (x === s && (x.status === 'waiting' || x.status === 'exited' || x.status === 'error' || x.status === 'disconnected')) finish(false); };
       const finish = (timedOut) => {
         clearTimeout(t);
         this.sessions.off('status', onStatus);

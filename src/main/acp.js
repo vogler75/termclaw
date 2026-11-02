@@ -128,7 +128,7 @@ class AcpSession extends BaseSession {
     this.permission = null; // pending permission request shown in the UI
     this.approval = ['ask', 'reads', 'all'].includes(opts.approval) ? opts.approval : 'ask';
     this.queue = Promise.resolve();
-    this.start();
+    if (this.disconnected) this.status = 'disconnected'; else this.start();
   }
 
   get agentDef() {
@@ -335,6 +335,7 @@ class AcpSession extends BaseSession {
   }
 
   _fail(message) {
+    if (this.disconnected) return;
     if (this.status === 'error' && this.error === message) return;
     this.error = message;
     this._log('error: ' + message);
@@ -659,7 +660,15 @@ class AcpSession extends BaseSession {
 
   reconnect() {
     this.close();
+    this.disconnected = false;
     this.start();
+  }
+
+  // Stops the agent process; reconnect() starts it again and resumes the conversation.
+  disconnect() {
+    if (this.disconnected) return;
+    this.close();
+    this._setDisconnected();
   }
 
   info() {

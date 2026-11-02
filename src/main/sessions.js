@@ -40,6 +40,8 @@ function containsBell(data) {
   return data.indexOf('\x07') >= 0 && data.replace(OSC_RE, '').indexOf('\x07') >= 0;
 }
 
+const DISCONNECTED_MSG = '\r\n\x1b[33m[termclaw] Disconnected. Reconnect to continue\x1b[0m\r\n';
+
 // ssh's password prompt ("user@host's password:", keyboard-interactive "Password:") ends the output.
 function isPasswordPrompt(text) {
   return /password[^\n]*:\s*$/i.test(stripAnsi(text));
@@ -73,7 +75,10 @@ class BaseSession extends EventEmitter {
     this.kind = opts.kind || 'terminal';
     this.shared = opts.shared !== undefined ? !!opts.shared : true;
     this.orchestrator = !!opts.orchestrator;
-    this.status = 'starting'; // starting | working | waiting | exited | error
+    this.status = 'starting'; // starting | working | waiting | exited | error | disconnected
+    // Disconnected by the user: the connection is closed (tmux and remote agent servers keep running),
+    // the session stays in the list and comes back with reconnect(). Persisted across restarts.
+    this.disconnected = !!opts.disconnected;
     this.lastOutputAt = Date.now();
     this.createdAt = Date.now();
     this.hadInput = false;
@@ -111,6 +116,14 @@ class BaseSession extends EventEmitter {
     };
   }
 
+  // Marks the session disconnected; subclasses close their connection first.
+  _setDisconnected() {
+    this.disconnected = true;
+    this.error = null;
+    this.setStatus('disconnected', 'user');
+    this.mgr.emit('exit', this);
+  }
+
   thresholdMs() {
     const p = this.project;
     const sec = (p && p.thresholdSec) || this.mgr.store.settings.defaultThresholdSec || 5;
@@ -138,7 +151,10 @@ class TerminalSession extends BaseSession {
     this.rawOffset = 0; // total characters ever received; raw holds the tail
     this.userClosed = false;
     this.reconnectAttempts = 0;
-    this.spawn();
+    if (this.disconnected) {
+      this.status = 'disconnected';
+      this._onData(DISCONNECTED_MSG, true);
+    } else this.spawn();
   }
 
 
@@ -187,6 +203,8 @@ class TerminalSession extends BaseSession {
     let pwUntil = spec.passwordFill ? Date.now() + 60000 : 0;
     let pwTail = '';
     p.onData((data) => {
+      // Output of a process that was disconnected or replaced by a reconnect is dropped.
+      if (this.pty !== p) return;
       this._onData(data);
       if (pwUntil) {
         pwTail = (pwTail + data).slice(-400);
@@ -203,7 +221,8 @@ class TerminalSession extends BaseSession {
         setTimeout(() => this.write(cmd + '\r', { internal: true }), 400);
       }
     });
-    p.onExit(({ exitCode }) => this._onExit(exitCode));
+    // An old process that ends after a reconnect must not touch the new one.
+    p.onExit(({ exitCode }) => { if (this.pty && this.pty !== p) return; this._onExit(exitCode); });
     this.mgr.emit('spawned', this);
   }
 
@@ -240,7 +259,7 @@ class TerminalSession extends BaseSession {
   _onExit(code) {
     this.pty = null;
     this.exitCode = code;
-    if (this.userClosed) return;
+    if (this.userClosed || this.disconnected) return;
     const msg = code === 0 ? 'Session ended' : `Connection closed (exit code ${code})`;
     this._onData(`\r\n\x1b[33m[termclaw] ${msg}\x1b[0m\r\n`, true);
     if (code !== 0) this.error = msg;
@@ -258,8 +277,20 @@ class TerminalSession extends BaseSession {
   reconnect() {
     clearTimeout(this._reconnectTimer);
     if (this.pty) { try { this.pty.kill(); } catch {} this.pty = null; }
+    this.disconnected = false;
     this.reconnectAttempts = 0;
     this.spawn();
+  }
+
+  disconnect() {
+    if (this.disconnected) return;
+    clearTimeout(this._reconnectTimer);
+    const p = this.pty;
+    this.pty = null;
+    this.disconnected = true;
+    if (p) { try { p.kill(); } catch {} }
+    this._onData(DISCONNECTED_MSG, true);
+    this._setDisconnected();
   }
 
   write(data, { internal } = {}) {
@@ -451,6 +482,32 @@ class SessionManager extends EventEmitter {
     this.persistOpen(s.projectId);
   }
 
+  reconnect(id) {
+    const s = this.get(id);
+    if (!s) return;
+    s.reconnect();
+    this.persistOpen(s.projectId);
+  }
+
+  disconnect(id) {
+    const s = this.get(id);
+    if (!s) return;
+    s.disconnect();
+    this.persistOpen(s.projectId);
+  }
+
+  // All sessions of a project: disconnect every one; reconnect those that are not running
+  // (disconnected, failed or ended).
+  disconnectProject(projectId) {
+    for (const s of this.list(projectId)) s.disconnect();
+    this.persistOpen(projectId);
+  }
+
+  reconnectProject(projectId) {
+    for (const s of this.list(projectId)) if (['disconnected', 'error', 'exited'].includes(s.status)) s.reconnect();
+    this.persistOpen(projectId);
+  }
+
   close(id, opts) {
     const s = this.get(id);
     if (!s) return;
@@ -467,6 +524,7 @@ class SessionManager extends EventEmitter {
     if (!p) return;
     p.openSessions = this.list(projectId).map((s) => ({
       name: s.name, command: s.command, kind: s.kind, shared: s.shared, orchestrator: s.orchestrator,
+      ...(s.disconnected ? { disconnected: true } : {}),
       ...(s.persistExtra ? s.persistExtra() : {}),
     }));
     this.store.save();

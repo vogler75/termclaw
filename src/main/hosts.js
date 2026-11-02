@@ -41,7 +41,7 @@ class HostMonitor extends EventEmitter {
 
   appSessionCount(hostId) {
     const projects = new Set(this.store.data.projects.filter((p) => p.hostId === hostId).map((p) => p.id));
-    return this.sessions.list().filter((s) => projects.has(s.projectId) && s.status !== 'exited').length;
+    return this.sessions.list().filter((s) => projects.has(s.projectId) && s.status !== 'exited' && s.status !== 'disconnected').length;
   }
 
   // Resolve aliases from ~/.ssh/config (HostName / Port) so reachability checks match what ssh does.

@@ -73,15 +73,21 @@ function activeExtra(p) {
 function showExtra(pid, key) { S.projectId = pid; S.view = 'project'; S.active[pid] = key; render(); }
 
 function projectStatus(pid) {
-  const list = projectSessions(pid);
-  if (!list.length) return 'none';
+  const all = projectSessions(pid);
+  if (!all.length) return 'none';
+  const list = all.filter((s) => s.status !== 'disconnected');
+  if (!list.length) return 'disconnected';
   if (list.some((s) => s.status === 'error')) return 'error';
   if (list.some((s) => s.status === 'working' || s.status === 'starting')) return 'working';
   if (list.some((s) => s.status === 'waiting')) return 'waiting';
   return 'exited';
 }
 
-const STATUS_LABEL = { working: 'working', waiting: 'waiting', starting: 'starting', error: 'error', exited: 'exited', none: 'no sessions' };
+const STATUS_LABEL = { working: 'working', waiting: 'waiting', starting: 'starting', error: 'error', exited: 'exited', disconnected: 'disconnected', none: 'no sessions' };
+
+// Disconnect / reconnect all sessions of a project (tmux sessions and remote agents keep running).
+const anyConnected = (pid) => projectSessions(pid).some((s) => s.status !== 'disconnected');
+const anyStopped = (pid) => projectSessions(pid).some((s) => ['disconnected', 'error', 'exited'].includes(s.status));
 const dot = (status, attrs = {}) => h('span', { class: 'dot ' + status, title: STATUS_LABEL[status] || status, ...attrs });
 
 // Font zoom per session, kept by project and session name so it survives restarts and reopening.
@@ -332,6 +338,8 @@ function projectMenu(e, p) {
     { label: 'New ACP agent: OpenCode', action: () => openSession(p.id, { kind: 'acp', acpAgent: 'opencode', name: 'opencode', command: '' }) },
     { label: 'New ACP agent: GitHub Copilot', action: () => openSession(p.id, { kind: 'acp', acpAgent: 'copilot', name: 'copilot', command: '' }) },
     { label: 'Start all terminals', action: () => startAll(p.id) },
+    ...(anyConnected(p.id) ? [{ label: 'Disconnect all sessions', action: () => call('disconnectProject', p.id) }] : []),
+    ...(anyStopped(p.id) ? [{ label: 'Reconnect all sessions', action: () => call('reconnectProject', p.id) }] : []),
     { label: 'Browse files…', action: () => files.openBrowser(ctx, p.id) },
     ...extrasOn(p).map((x) => ({ label: x.label, action: () => showExtra(p.id, x.key) })),
     '-',
@@ -353,6 +361,7 @@ function sessionMenu(e, s) {
     { label: 'Move down', action: () => call('moveSession', s.id, 1) },
     { label: s.shared ? '✓ Shared with MCP' : 'Share with MCP', action: () => call('setSessionFlags', s.id, { shared: !s.shared }) },
     { label: s.orchestrator ? '✓ Orchestrator session' : 'Mark as orchestrator', action: () => call('setSessionFlags', s.id, { orchestrator: !s.orchestrator }) },
+    ...(s.status === 'disconnected' ? [] : [{ label: 'Disconnect', action: () => call('disconnect', s.id) }]),
     { label: 'Reconnect', action: () => call('reconnect', s.id) },
     { label: 'Browse files…', action: () => browseFrom(s) },
     ...(s.kind === 'terminal' ? ['-',
@@ -476,6 +485,8 @@ function renderProject(main) {
       h('button', { onclick: (e) => sessionTypeMenu(e, p), title: 'Local shells on this computer and the project’s local shell' }, '▾')),
     h('button', { onclick: (e) => agentMenu(e, p), title: 'Start a structured agent session (chat view)' }, '+ Agent ▾'),
     (p.terminals || []).length ? h('button', { onclick: () => startAll(p.id), title: 'Start all configured terminals' }, '▶ All') : null,
+    list.length && !anyConnected(p.id) ? h('button', { onclick: () => call('reconnectProject', p.id), title: 'Reconnect all sessions of this project' }, 'Reconnect')
+      : list.length ? h('button', { onclick: () => call('disconnectProject', p.id), title: 'Close the connections of all sessions; tmux sessions and remote agents keep running. Reconnect brings them back.' }, 'Disconnect') : null,
     h('button', { class: m === 'tabs' ? 'active' : '', onclick: () => setMode(p, 'tabs') }, 'Tabs'),
     h('button', { class: m === 'tiles' ? 'active' : '', onclick: () => setMode(p, 'tiles'), title: 'Tile view (Ctrl+Shift+G)' }, 'Tiles'),
     h('button', { title: 'Browse files on the project machine, upload and download (or drop files onto a terminal)', onclick: () => { const sid = activeSessionId(p.id); const s = sid && S.sessions.get(sid); s ? browseFrom(s) : files.openBrowser(ctx, p.id); } }, 'Files'),
@@ -534,6 +545,13 @@ function mountSession(container, s, { fontSize, compact = false } = {}) {
   t.setFontSize(fontSize);
   applyScheme(s.id);
   t.attach(box);
+  if (!compact && s.status === 'disconnected') {
+    box.appendChild(h('div', { class: 'overlay-err disconnected' },
+      h('div', { class: 'msg' }, 'Disconnected'),
+      h('div', { class: 'row' },
+        h('button', { class: 'primary', onclick: () => call('reconnect', s.id) }, 'Reconnect'),
+        projectSessions(s.projectId).filter((x) => x.status === 'disconnected').length > 1 ? h('button', { onclick: () => call('reconnectProject', s.projectId) }, 'Reconnect all') : null)));
+  }
   if (!compact && (s.status === 'error') && s.error) {
     box.appendChild(h('div', { class: 'overlay-err' },
       h('div', { class: 'msg' }, s.error),
@@ -735,17 +753,20 @@ on('session:closed', ({ id }) => {
   if (t) { t.dispose(); terms.delete(id); }
   renderSoon();
 });
+// Status changes that change more than the dot: error and disconnected show an overlay and buttons.
+const MAJOR = new Set(['error', 'disconnected']);
 on('session:updated', (info) => {
   const prev = S.sessions.get(info.id);
   S.sessions.set(info.id, info);
   if (info.kind !== 'terminal') { pages.refreshChatStatus(ctx, info.id); renderPermission(ctx, info.id); }
-  if (!prev || prev.name !== info.name || prev.shared !== info.shared || prev.orchestrator !== info.orchestrator || prev.error !== info.error || (prev.status !== info.status && (prev.status === 'error' || info.status === 'error'))) renderSoon();
+  if (!prev || prev.name !== info.name || prev.shared !== info.shared || prev.orchestrator !== info.orchestrator || prev.error !== info.error || (prev.status !== info.status && (MAJOR.has(prev.status) || MAJOR.has(info.status)))) renderSoon();
   else updateDots(); // plain status changes only recolor the dots, so clicks and double-clicks are not lost to a re-render
 });
 on('session:status', ({ id, status, lastOutputAt }) => {
   const s = S.sessions.get(id);
   if (!s) return;
   const wasError = s.status === 'error';
+  if (status !== s.status && (status === 'disconnected' || s.status === 'disconnected')) renderSoon();
   s.status = status;
   s.lastOutputAt = lastOutputAt;
   if (status === 'error' || wasError) { call('getState').then((st) => { for (const i of st.sessions) S.sessions.set(i.id, i); renderSoon(); }); }

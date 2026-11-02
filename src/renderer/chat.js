@@ -181,7 +181,7 @@ export function fillStatus(ctx, el, s) {
     h('span', { class: 'spacer' }),
     h('button', { title: info.kind === 'acp' ? `Open a terminal to log in to ${info.agentName || 'the agent'}` : 'Open a terminal with “opencode auth login” to connect a provider (API key or OAuth)', onclick: () => providerLogin(ctx, s.id) }, info.kind === 'acp' ? 'Login' : 'Provider login'),
     h('button', { class: 'icon', title: 'Refresh the model after logging in', onclick: () => ctx.call('agentRefreshModel', s.id) }, '↻'),
-    info.status === 'error' ? h('button', { onclick: () => ctx.call('reconnect', s.id) }, 'Reconnect') : null,
+    info.status === 'error' || info.status === 'disconnected' ? h('button', { onclick: () => ctx.call('reconnect', s.id) }, 'Reconnect') : null,
     // Full-width block: start errors can span several lines (server log excerpt).
     info.error ? h('div', { class: 'bad mono', style: { flexBasis: '100%', whiteSpace: 'pre-wrap', fontSize: '12px', maxHeight: '220px', overflow: 'auto' } }, info.error) : null,
   ].filter(Boolean));
