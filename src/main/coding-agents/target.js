@@ -5,7 +5,7 @@
 // Scripts are passed via stdin, so there are no quoting or command-line length issues.
 const { spawn } = require('child_process');
 const os = require('os');
-const { resolveTarget, sshBaseArgs, sshDest, projectDir, SSH_BIN, windowsTarget } = require('../connect');
+const { resolveTarget, sshBaseArgs, sshDest, projectDir, SSH_BIN, windowsTarget, batchOpts, authEnv, specEnv } = require('../connect');
 
 const IS_WIN = process.platform === 'win32';
 
@@ -40,11 +40,11 @@ class Target {
       if (!this.remoteWindows) return { file: 'powershell.exe', args };
       // Windows OpenSSH runs the command through cmd.exe or PowerShell; the encoded form needs no quoting.
       const t = resolveTarget(p, this.host);
-      return { file: SSH_BIN, args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', ...sshBaseArgs({ ...p, keepAlive: false }, t), sshDest(t), ['powershell.exe', ...args].join(' ')] };
+      return { file: SSH_BIN, args: [...batchOpts(p, this.host), '-o', 'ConnectTimeout=10', ...sshBaseArgs({ ...p, keepAlive: false }, t), sshDest(t), ['powershell.exe', ...args].join(' ')], env: authEnv(p, this.host) };
     }
     if (p.type === 'ssh') {
       const t = resolveTarget(p, this.host);
-      return { file: SSH_BIN, args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', ...sshBaseArgs({ ...p, keepAlive: false }, t), sshDest(t), BASH_OR_SH] };
+      return { file: SSH_BIN, args: [...batchOpts(p, this.host), '-o', 'ConnectTimeout=10', ...sshBaseArgs({ ...p, keepAlive: false }, t), sshDest(t), BASH_OR_SH], env: authEnv(p, this.host) };
     }
     if (p.type === 'wsl') {
       return { file: 'wsl.exe', args: [...(p.wslDistro ? ['-d', p.wslDistro] : []), '--', 'sh', '-c', BASH_OR_SH] };
@@ -59,7 +59,7 @@ class Target {
       let out = '';
       let err = '';
       let p;
-      try { p = spawn(spec.file, spec.args, { windowsHide: true }); } catch (e) { return resolve({ code: -1, out: '', err: e.message }); }
+      try { p = spawn(spec.file, spec.args, { windowsHide: true, env: specEnv(spec) }); } catch (e) { return resolve({ code: -1, out: '', err: e.message }); }
       const t = setTimeout(() => { try { p.kill(); } catch {} err += '\n[timeout]'; }, timeout);
       p.stdout.on('data', (d) => (out += d));
       p.stderr.on('data', (d) => (err += d));

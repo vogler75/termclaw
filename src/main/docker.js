@@ -7,7 +7,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 const { Duplex } = require('stream');
 const { EventEmitter } = require('events');
-const { resolveTarget, sshBaseArgs, sshDest, SSH_BIN, buildRemoteExec, shq, windowsTarget, windowsOnlyTerminal } = require('./connect');
+const { resolveTarget, sshBaseArgs, sshDest, SSH_BIN, buildRemoteExec, batchOpts, authEnv, specEnv, shq, windowsTarget, windowsOnlyTerminal } = require('./connect');
 
 const FAST_MS = 3000; // container list and stats
 const SLOW_MS = 60000; // engine info, disk usage (system df), host memory/disk
@@ -21,7 +21,7 @@ function dialSpec(project, host) {
   const cli = dockerCli(project);
   if (project.type === 'ssh') {
     const t = resolveTarget(project, host);
-    return { file: SSH_BIN, args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', ...sshBaseArgs(project, t), sshDest(t), [...cli, 'system', 'dial-stdio'].map(shq).join(' ')] };
+    return { file: SSH_BIN, args: [...batchOpts(project, host), '-o', 'ConnectTimeout=10', ...sshBaseArgs(project, t), sshDest(t), [...cli, 'system', 'dial-stdio'].map(shq).join(' ')], env: authEnv(project, host) };
   }
   if (project.type === 'wsl') {
     return { file: 'wsl.exe', args: [...(project.wslDistro ? ['-d', project.wslDistro] : []), '--exec', ...cli, 'system', 'dial-stdio'] };
@@ -33,7 +33,7 @@ function dialSpec(project, host) {
 
 // A child process's stdio as a socket for the http module.
 function stdioSocket(spec) {
-  const p = spawn(spec.file, spec.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: spec.env ? { ...process.env, ...spec.env } : process.env });
+  const p = spawn(spec.file, spec.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: specEnv(spec) });
   let stderr = '';
   const sock = new Duplex({
     read() { p.stdout.resume(); },
@@ -334,7 +334,7 @@ class ProjectDocker {
     const host = p.hostId ? this.mgr.store.getHost(p.hostId) : null;
     const ex = buildRemoteExec(p, host, hostStatsScript(dir));
     return new Promise((resolve, reject) => {
-      const proc = spawn(ex.file, ex.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      const proc = spawn(ex.file, ex.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: specEnv(ex) });
       let out = '';
       const timer = setTimeout(() => { proc.kill(); reject(new Error('timeout')); }, 15000);
       proc.stdout.on('data', (d) => (out += d));

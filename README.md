@@ -72,7 +72,7 @@ The project editor sets the connection (local, SSH, WSL, or a developer host), s
 | OpenCode server | `opencode serve` (locally directly, on SSH/WSL targets inside tmux), reached over its HTTP API; SSH targets via `ssh -L`. |
 | ACP agent | the agent process (`opencode acp`, `copilot --acp`, …) with JSON-RPC over stdin/stdout — locally as a child process, on SSH/WSL through the same connection. |
 
-Authentication uses SSH keys, ssh-agent and your own `~/.ssh/config` only (host aliases work as hostnames). No passwords are stored; fields such as `password` are stripped on save and import. Port forwarding per SSH project (local port → remote port) runs as a separate `ssh -N -L …` process while at least one session of the project is running.
+Authentication uses SSH keys, ssh-agent and your own `~/.ssh/config` (host aliases work as hostnames). Keys are recommended; for machines without them a host (or an SSH project with its own connection) can store a password. It is encrypted with the OS keychain (Electron safeStorage), kept only on this computer and never exported. Terminals get it typed in once at ssh's password prompt; Docker, Monitor, Git, files and port forwards hand it to ssh through an `SSH_ASKPASS` helper (never on the command line), with one attempt per connection. Other password fields are stripped on save and import. Port forwarding per SSH project (local port → remote port) runs as a separate `ssh -N -L …` process while at least one session of the project is running.
 
 ### X11 forwarding
 

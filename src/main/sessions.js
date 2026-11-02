@@ -4,7 +4,7 @@ const { EventEmitter } = require('events');
 const crypto = require('crypto');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
-const { buildSpawn, buildTmuxKill, localShellName, localShellLabel, windowsTarget } = require('./connect');
+const { buildSpawn, buildTmuxKill, localShellName, localShellLabel, windowsTarget, specEnv, sshPassword } = require('./connect');
 
 let pty = null;
 function getPty() {
@@ -38,6 +38,11 @@ const RESIZE_GRACE_MS = 800;
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 function containsBell(data) {
   return data.indexOf('\x07') >= 0 && data.replace(OSC_RE, '').indexOf('\x07') >= 0;
+}
+
+// ssh's password prompt ("user@host's password:", keyboard-interactive "Password:") ends the output.
+function isPasswordPrompt(text) {
+  return /password[^\n]*:\s*$/i.test(stripAnsi(text));
 }
 
 function stripAnsi(s) {
@@ -177,8 +182,21 @@ class TerminalSession extends BaseSession {
     }
     this.pty = p;
     let pendingPost = spec.postStart;
+    // A stored password is typed once at ssh's password prompt within the first minute; a second prompt
+    // (wrong password) is left to the user.
+    let pwUntil = spec.passwordFill ? Date.now() + 60000 : 0;
+    let pwTail = '';
     p.onData((data) => {
       this._onData(data);
+      if (pwUntil) {
+        pwTail = (pwTail + data).slice(-400);
+        if (Date.now() > pwUntil) pwUntil = 0;
+        else if (isPasswordPrompt(pwTail)) {
+          pwUntil = 0;
+          const pw = sshPassword(project, host);
+          if (pw) this.write(pw + '\r', { internal: true });
+        }
+      }
       if (pendingPost) {
         const cmd = pendingPost;
         pendingPost = '';
@@ -311,7 +329,7 @@ class TerminalSession extends BaseSession {
       const k = project && buildTmuxKill(project, host, this.tmuxName);
       if (k) {
         const { spawn } = require('child_process');
-        try { spawn(k.file, k.args, { stdio: 'ignore', windowsHide: true }).on('error', () => {}); } catch {}
+        try { spawn(k.file, k.args, { stdio: 'ignore', windowsHide: true, env: specEnv(k) }).on('error', () => {}); } catch {}
       }
     }
     this.headless.dispose();
@@ -469,4 +487,4 @@ class SessionManager extends EventEmitter {
   }
 }
 
-module.exports = { SessionManager, TerminalSession, BaseSession, containsBell, stripAnsi };
+module.exports = { SessionManager, TerminalSession, BaseSession, containsBell, stripAnsi, isPasswordPrompt };

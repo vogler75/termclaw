@@ -74,6 +74,32 @@ function sshBaseArgs(project, target) {
   return args;
 }
 
+// Stored ssh passwords (encrypted in the config) reach ssh through SSH_ASKPASS: ssh has no option for a
+// password. The helper script prints TERMCLAW_SSH_PASSWORD from the environment of that one ssh process
+// and answers only password prompts; the main process registers the script and the password lookup.
+let askpass = { file: '', lookup: () => '' };
+function setAskpass(a) { askpass = { ...askpass, ...a }; }
+
+function sshPassword(project, host) {
+  if (!askpass.file) return '';
+  try { return askpass.lookup(project, host) || ''; } catch { return ''; }
+}
+
+// Options for an ssh process without a terminal: BatchMode (never prompt), or with a stored password the
+// askpass helper and a single attempt. Other prompts (unknown host key) fail just like in BatchMode.
+function batchOpts(project, host) {
+  return sshPassword(project, host) ? ['-o', 'BatchMode=no', '-o', 'NumberOfPasswordPrompts=1'] : ['-o', 'BatchMode=yes'];
+}
+
+// Extra environment for that ssh process, or null.
+function authEnv(project, host) {
+  const pw = sshPassword(project, host);
+  return pw ? { SSH_ASKPASS: askpass.file, SSH_ASKPASS_REQUIRE: 'force', TERMCLAW_SSH_PASSWORD: pw } : null;
+}
+
+// Environment for child_process.spawn of a spec ({ file, args, env? }).
+const specEnv = (spec) => (spec && spec.env ? { ...process.env, ...spec.env } : process.env);
+
 function sshDest(target) {
   if (!target.hostname) throw new Error('No host configured for this project');
   return target.user ? `${target.user}@${target.hostname}` : target.hostname;
@@ -215,7 +241,8 @@ function buildSpawn(project, host, session) {
     const tmuxOn = useTmux && !win;
     const script = win ? windowsSessionCommand(dir, session.id, command) : tmuxOn ? tmuxScript(name, dir, command) : plainScript(dir, session.id);
     const sshArgs = ['-t', ...sshBaseArgs(project, target), sshDest(target), script];
-    const spec = { file: SSH_BIN, args: sshArgs, cwd: os.homedir(), postStart: !tmuxOn && !win && command ? command : '', tmuxName: tmuxOn ? name : null };
+    // passwordFill: a stored password is typed into the terminal at ssh's password prompt (sessions.js).
+    const spec = { file: SSH_BIN, args: sshArgs, cwd: os.homedir(), postStart: !tmuxOn && !win && command ? command : '', tmuxName: tmuxOn ? name : null, passwordFill: !!sshPassword(project, host) };
     const x11 = x11Mode(project);
     if (x11 === 'wsl') {
       // WSLg's X server is only reachable inside WSL, so the ssh client of the distribution runs the session.
@@ -255,7 +282,7 @@ function buildTmuxKill(project, host, name) {
   const script = `tmux kill-session -t ${shq('=' + name)} 2>/dev/null; true`;
   if (project.type === 'ssh') {
     const target = resolveTarget(project, host);
-    return { file: 'ssh', args: ['-o', 'BatchMode=yes', ...sshBaseArgs(project, target), sshDest(target), script] };
+    return { file: 'ssh', args: [...batchOpts(project, host), ...sshBaseArgs(project, target), sshDest(target), script], env: authEnv(project, host) };
   }
   if (project.type === 'wsl') {
     const args = project.wslDistro ? ['-d', project.wslDistro] : [];
@@ -268,7 +295,7 @@ function buildTmuxKill(project, host, name) {
 // Arguments for a background ssh process that only does port forwarding.
 function buildForwardArgs(project, host) {
   const target = resolveTarget(project, host);
-  const args = ['-N', '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes', ...sshBaseArgs(project, target)];
+  const args = ['-N', '-o', 'ExitOnForwardFailure=yes', ...batchOpts(project, host), ...sshBaseArgs(project, target)];
   for (const f of project.forwards || []) {
     if (!f.local || !f.remote) continue;
     args.push('-L', `127.0.0.1:${Number(f.local)}:${f.remoteHost || 'localhost'}:${Number(f.remote)}`);
@@ -282,7 +309,7 @@ function buildRemoteExec(project, host, script) {
   if (windowsTarget(project)) throw new Error(windowsOnlyTerminal('This feature'));
   if (project.type === 'ssh' || (!project.type && host)) {
     const target = resolveTarget(project, host);
-    return { file: 'ssh', args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', ...sshBaseArgs(project, target), sshDest(target), script] };
+    return { file: 'ssh', args: [...batchOpts(project, host), '-o', 'ConnectTimeout=8', ...sshBaseArgs(project, target), sshDest(target), script], env: authEnv(project, host) };
   }
   if (project.type === 'wsl') {
     const args = project.wslDistro ? ['-d', project.wslDistro] : [];
@@ -293,6 +320,7 @@ function buildRemoteExec(project, host, script) {
 }
 
 module.exports = {
+  setAskpass, sshPassword, batchOpts, authEnv, specEnv,
   SSH_BIN, windowsTarget, windowsOnlyTerminal, windowsSessionCommand, psq, buildSpawn, buildTmuxKill, buildForwardArgs, buildRemoteExec,
   tmuxName, tmuxScript, shq, posixDir, resolveTarget, sshBaseArgs, sshDest, projectDir, x11Mode,
   buildLocalShell, localShellLabel, localShellName, findGitBash, detectLocalShells,

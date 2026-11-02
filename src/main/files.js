@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { buildRemoteExec, shq, posixDir, projectDir, windowsTarget, windowsOnlyTerminal } = require('./connect');
+const { buildRemoteExec, shq, posixDir, projectDir, windowsTarget, windowsOnlyTerminal, specEnv } = require('./connect');
 
 const IS_WIN = process.platform === 'win32';
 const LOCAL_TAR = IS_WIN ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
@@ -76,7 +76,7 @@ class RemoteFiles {
   run(script, { stdin, stdout, timeout = 30000 } = {}) {
     const spec = buildRemoteExec(this.project, this.host, script);
     return new Promise((resolve, reject) => {
-      const p = spawn(spec.file, spec.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      const p = spawn(spec.file, spec.args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: specEnv(spec) });
       const out = [];
       let err = '';
       let timer = timeout ? setTimeout(() => { p.kill(); reject(new Error('timed out')); }, timeout) : null;

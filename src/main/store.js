@@ -123,10 +123,14 @@ function normalize(data) {
     apmLibrary: d.apmLibrary || [],
     // Git repositories the app downloads skills from into the local skills repository.
     skillSources: d.skillSources || [],
+    // Stored ssh passwords, encrypted (secrets.js), keyed 'host:<id>' or 'project:<id>'. Machine-local:
+    // never sent to the renderer, never exported.
+    credentials: d.credentials && typeof d.credentials === 'object' ? d.credentials : {},
   };
 }
 
-// Passwords are never stored: strip anything that looks like one on save/import.
+// Passwords are never stored in clear text: strip anything that looks like one on save/import
+// (stored ssh passwords live encrypted in `credentials`).
 function stripSecrets(obj) {
   if (Array.isArray(obj)) return obj.map(stripSecrets);
   if (obj && typeof obj === 'object') {
@@ -206,6 +210,7 @@ class Store extends EventEmitter {
   }
   deleteProject(id) {
     this.data.projects = this.data.projects.filter((p) => p.id !== id);
+    delete this.data.credentials['project:' + id];
     this.save();
   }
   // Moves a project before another one (or to the end when beforeId is empty).
@@ -243,12 +248,21 @@ class Store extends EventEmitter {
   deleteHost(id) {
     this.data.hosts = this.data.hosts.filter((h) => h.id !== id);
     for (const p of this.data.projects) if (p.hostId === id) p.hostId = '';
+    delete this.data.credentials['host:' + id];
+    this.save();
+  }
+
+  // Encrypted ssh password of a host or project (key 'host:<id>' / 'project:<id>'); empty blob removes it.
+  getCredential(key) { return this.data.credentials[key] || ''; }
+  setCredential(key, blob) {
+    if (blob) this.data.credentials[key] = blob; else delete this.data.credentials[key];
     this.save();
   }
 
   // Import / export
   exportJson() {
-    const { tokens, oauthClients, oauthGrants, ...rest } = this.data; // tokens are machine-local secrets (hashes), not exported
+    // tokens and stored passwords are machine-local secrets, not exported
+    const { tokens, oauthClients, oauthGrants, credentials, ...rest } = this.data;
     return JSON.stringify(stripSecrets(rest), null, 2);
   }
   importJson(text, { merge = false } = {}) {
@@ -267,6 +281,7 @@ class Store extends EventEmitter {
       incoming.tokens = this.data.tokens;
       incoming.oauthClients = this.data.oauthClients;
       incoming.oauthGrants = this.data.oauthGrants;
+      incoming.credentials = this.data.credentials;
       this.data = incoming;
     }
     this.save();

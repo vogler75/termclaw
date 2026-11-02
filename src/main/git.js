@@ -36,7 +36,7 @@ function badRef(name) {
 // Spawns a script on the project machine and collects stdout / stderr.
 function runSpec(spec, { timeout = 60000, env } = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn(spec.file, spec.args, { windowsHide: true, env: { ...process.env, ...(env || {}) } });
+    const p = spawn(spec.file, spec.args, { windowsHide: true, env: { ...process.env, ...(spec.env || {}), ...(env || {}) } });
     const out = [];
     const err = [];
     let done = false;

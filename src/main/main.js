@@ -11,7 +11,8 @@ const { ForwardManager } = require('./forwards');
 const { DockerManager, execCommand: dockerExecCommand } = require('./docker');
 const { MonitorManager } = require('./monitor');
 const { GitManager } = require('./git');
-const { detectLocalShells } = require('./connect');
+const { detectLocalShells, setAskpass } = require('./connect');
+const askpass = require('./askpass');
 const { AuditLog } = require('./audit');
 const { McpService } = require('./mcp');
 const { OrchestratorManager } = require('./orchestrators');
@@ -79,6 +80,8 @@ function notify(title, body, onClick) {
 function setup() {
   const dataDir = app.getPath('userData');
   store = new Store(dataDir);
+  // Stored ssh passwords: a host's password for projects on that host, else the project's own.
+  setAskpass({ file: askpass.install(dataDir), lookup: (project, host) => storedPassword(host ? 'host:' + host.id : project && project.id ? 'project:' + project.id : '') });
   audit = new AuditLog(dataDir);
   sessions = new SessionManager(store);
   sessions.agentFactory = (mgr, project, opts) => new AgentSession(mgr, project, opts);
@@ -135,9 +138,14 @@ function setup() {
 let activeSessionId = null;
 
 function publicConfig() {
-  const { tokens, oauthClients, oauthGrants, mcpLibrary, ...rest } = store.data;
-  // MCP secrets stay in the main process; the renderer only sees which keys exist.
-  return { ...rest, mcpLibrary: mcpLibrary.map(({ secrets: s, ...e }) => ({ ...e, ...secretKeys(s) })) };
+  const { tokens, oauthClients, oauthGrants, mcpLibrary, credentials, ...rest } = store.data;
+  // MCP secrets and ssh passwords stay in the main process; the renderer only sees which ones exist.
+  return { ...rest, mcpLibrary: mcpLibrary.map(({ secrets: s, ...e }) => ({ ...e, ...secretKeys(s) })), storedPasswords: Object.keys(credentials) };
+}
+
+function storedPassword(key) {
+  const blob = key && store.getCredential(key);
+  return blob ? secrets.decrypt(blob).password || '' : '';
 }
 
 function secretKeys(blob) {
@@ -283,6 +291,20 @@ const api = {
   // hosts
   saveHost: (h) => { const r = store.saveHost(h); hosts.check(r); return r; },
   deleteHost: (id) => store.deleteHost(id),
+  // key: 'host:<id>' or 'project:<id>'; an empty password removes the stored one.
+  setSshPassword: (key, password) => {
+    const m = /^(host|project):([\w-]+)$/.exec(String(key));
+    if (!m) throw new Error('invalid key');
+    store.setCredential(key, password ? secrets.encrypt({ password: String(password) }) : '');
+    // Running Docker / Monitor / Git connections pick up the change on their next start.
+    for (const p of store.data.projects) {
+      if (m[1] === 'host' ? p.hostId !== m[2] : p.id !== m[2]) continue;
+      docker.reset(p.id);
+      monitor.reset(p.id);
+      git.reset(p.id);
+    }
+    return { stored: !!password, encrypted: secrets.available() };
+  },
   checkHosts: () => hosts.checkAll(),
   checkHostSsh: (id) => { const h = store.getHost(id); return h ? hosts.checkRemoteSessions(h) : null; },
 

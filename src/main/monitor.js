@@ -5,7 +5,7 @@
 // computed here from two consecutive samples. Polling runs while the Monitor tab is visible.
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const { buildRemoteExec, shq, windowsTarget } = require('./connect');
+const { buildRemoteExec, shq, windowsTarget, specEnv } = require('./connect');
 
 const SAMPLE_SEC = 2;
 const IDLE_STOP_MS = 15000; // stop the remote loop this long after the tab was left
@@ -293,7 +293,7 @@ class ProjectMonitor {
     this.snap = { ...this.snap, loading: true, error: null };
     let buf = '';
     let errText = '';
-    const proc = spawn(spec.file, spec.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(spec.file, spec.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: specEnv(spec) });
     this.proc = proc;
     proc.stdout.on('data', (d) => {
       buf += d;

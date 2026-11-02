@@ -93,6 +93,7 @@ export async function editProject(ctx, p) {
   const hostSel = h('select', null, h('option', { value: '' }, '— custom connection —'), S.config.hosts.map((x) => h('option', { value: x.id, selected: p.hostId === x.id }, `${x.name} (${x.user ? x.user + '@' : ''}${x.hostname})`)));
   const host = I('host', { placeholder: 'hostname or IP' });
   const user = I('user', { placeholder: 'user' });
+  const pw = sshPasswordField(ctx, isNew ? '' : 'project:' + p.id);
   const port = I('port', { type: 'number' });
   const dir = I('directory', { placeholder: 'e.g. ~/workspace/backend or C:\\Projects\\x' });
   const distro = I('wslDistro', { placeholder: 'e.g. Ubuntu' });
@@ -185,6 +186,7 @@ export async function editProject(ctx, p) {
     grp(sshOnly, ...field('Developer host', hostSel, 'Projects reference a host from the host directory')),
     grp(hostUserOnly, ...field('Host', host)),
     grp(hostUserOnly, ...field('User', user)),
+    grp(hostUserOnly, ...field('Password', ...pw.field)),
     grp(inlineOnly, ...field('Port', port)),
     grp(sshOnly, h('label', null, 'Remote system'), h('div', null, h('div', { class: 'row' }, remoteOs, winHelp), remoteHint)),
     grp(wslOnly, ...field('WSL distribution', distro)),
@@ -297,6 +299,7 @@ export async function editProject(ctx, p) {
         agentSetup: agentSection.get(),
       };
       const saved = await call('saveProject', out);
+      if (out.type === 'ssh' && !out.hostId) await pw.apply('project:' + saved.id);
       ctx.S.projectId = saved.id;
       ctx.S.view = 'project';
       const idx = ctx.S.config.projects.findIndex((x) => x.id === saved.id);
@@ -310,7 +313,7 @@ export async function editProject(ctx, p) {
 export function renderHosts(ctx, main) {
   main.appendChild(h('div', { class: 'main-head' },
     h('span', { class: 'title' }, 'Developer hosts'),
-    h('span', { class: 'muted' }, 'Login via SSH keys / ssh-agent / ~/.ssh/config — no passwords are stored'),
+    h('span', { class: 'muted' }, 'Login via SSH keys / ssh-agent / ~/.ssh/config, or an optional stored password'),
     h('div', { class: 'spacer' }),
     h('button', { onclick: () => ctx.call('checkHosts') }, '↻ Check'),
     h('button', { class: 'primary', onclick: () => editHost(ctx, null) }, '+ Host')));
@@ -362,6 +365,23 @@ async function quickProject(ctx, host) {
   selects[1].dispatchEvent(new Event('change'));
 }
 
+// Optional ssh password (key 'host:<id>' / 'project:<id>'). Only whether one is stored reaches the renderer;
+// typing replaces it, the checkbox removes it. apply(key) runs after the host / project was saved.
+function sshPasswordField(ctx, key) {
+  const stored = !!key && (ctx.S.config.storedPasswords || []).includes(key);
+  const input = h('input', { type: 'password', autocomplete: 'new-password', style: { flex: '1' }, placeholder: stored ? '•••••••• stored (type to replace)' : 'optional, SSH keys are preferred' });
+  const forget = h('input', { type: 'checkbox' });
+  return {
+    // field('Password', ...pw.field): input row and hint as separate grid cells, aligned like the other fields
+    field: [h('div', { class: 'row' }, input, stored ? h('label', { class: 'row', style: { flex: 'none' } }, forget, 'Forget') : null),
+      'Stored encrypted on this computer and never exported. Typed in at the password prompt of a terminal, and used for Docker, Monitor, Git and files.'],
+    apply: async (k) => {
+      if (input.value) await ctx.call('setSshPassword', k, input.value);
+      else if (stored && forget.checked) await ctx.call('setSshPassword', k, '');
+    },
+  };
+}
+
 function editHost(ctx, host) {
   const x = host || { port: 22, workspace: '~/workspace', tags: [] };
   const name = h('input', { value: x.name || '' });
@@ -370,12 +390,14 @@ function editHost(ctx, host) {
   const user = h('input', { value: x.user || '' });
   const ws = h('input', { value: x.workspace || '~/workspace' });
   const tags = h('input', { value: (x.tags || []).join(', '), placeholder: 'gpu, large, …' });
+  const pw = sshPasswordField(ctx, host ? 'host:' + host.id : '');
   modal({
     title: host ? 'Edit host' : 'New host',
-    body: h('div', { class: 'form' }, field('Name', name), field('Hostname/IP', hostname), field('Port', port), field('User', user), field('Workspace folder', ws), field('Tags', tags, 'Comma-separated')),
+    body: h('div', { class: 'form' }, field('Name', name), field('Hostname/IP', hostname), field('Port', port), field('User', user), field('Password', ...pw.field), field('Workspace folder', ws), field('Tags', tags, 'Comma-separated')),
     onOk: async () => {
       if (!hostname.value.trim()) throw new Error('Hostname is missing');
-      await ctx.call('saveHost', { ...x, name: name.value.trim() || hostname.value.trim(), hostname: hostname.value.trim(), port: Number(port.value) || 22, user: user.value.trim(), workspace: ws.value.trim(), tags: tags.value });
+      const saved = await ctx.call('saveHost', { ...x, name: name.value.trim() || hostname.value.trim(), hostname: hostname.value.trim(), port: Number(port.value) || 22, user: user.value.trim(), workspace: ws.value.trim(), tags: tags.value });
+      await pw.apply('host:' + saved.id);
     },
   });
 }

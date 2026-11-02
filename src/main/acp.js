@@ -7,7 +7,7 @@ const { EventEmitter } = require('events');
 const os = require('os');
 const { BaseSession } = require('./sessions');
 const { findOpencode } = require('./opencode');
-const { resolveTarget, sshBaseArgs, sshDest, projectDir, posixDir, shq, SSH_BIN } = require('./connect');
+const { resolveTarget, sshBaseArgs, sshDest, batchOpts, authEnv, specEnv, projectDir, posixDir, shq, SSH_BIN } = require('./connect');
 const { Target } = require('./coding-agents/target');
 
 const IS_WIN = process.platform === 'win32';
@@ -177,8 +177,9 @@ class AcpSession extends BaseSession {
     const target = resolveTarget(project, host);
     return {
       file: SSH_BIN,
-      args: ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', ...sshBaseArgs(project, target), sshDest(target), `sh -c ${shq(script)}`],
+      args: ['-T', ...batchOpts(project, host), '-o', 'ConnectTimeout=10', ...sshBaseArgs(project, target), sshDest(target), `sh -c ${shq(script)}`],
       cwd: os.homedir(),
+      env: authEnv(project, host),
     };
   }
 
@@ -197,7 +198,7 @@ class AcpSession extends BaseSession {
         this.remoteHome = m[1];
       }
       const spec = this._spawnSpec();
-      const proc = spawn(spec.file, spec.args, { cwd: spec.cwd, shell: spec.shell, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      const proc = spawn(spec.file, spec.args, { cwd: spec.cwd, shell: spec.shell, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: specEnv(spec) });
       this.proc = proc;
       proc.on('error', (e) => this._fail(`Could not start ${this.agentDef.name}: ${e.message}`));
       const conn = new AcpConnection(proc);

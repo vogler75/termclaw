@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { BaseSession } = require('./sessions');
 const { OpenCodeClient, LocalOpenCodeServer, findOpencode, freePort, simplifyMessages, messagesToText } = require('./opencode');
-const { resolveTarget, sshBaseArgs, sshDest, projectDir, posixDir, shq, tmuxName, SSH_BIN } = require('./connect');
+const { resolveTarget, sshBaseArgs, sshDest, batchOpts, authEnv, specEnv, projectDir, posixDir, shq, tmuxName, SSH_BIN } = require('./connect');
 const { Target } = require('./coding-agents/target');
 
 const SLASH_BUILTINS = [
@@ -103,8 +103,8 @@ class AgentSession extends BaseSession {
       const t = resolveTarget(project, host);
       const base = [...sshBaseArgs(project, t)];
       const localPort = await freePort();
-      const fwd = spawn(SSH_BIN, ['-N', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', ...base,
-        '-L', `127.0.0.1:${localPort}:127.0.0.1:${this.remotePort}`, sshDest(t)], { windowsHide: true, stdio: 'ignore' });
+      const fwd = spawn(SSH_BIN, ['-N', ...batchOpts(project, host), '-o', 'ExitOnForwardFailure=yes', ...base,
+        '-L', `127.0.0.1:${localPort}:127.0.0.1:${this.remotePort}`, sshDest(t)], { windowsHide: true, stdio: 'ignore', env: specEnv({ env: authEnv(project, host) }) });
       this.procs.push(fwd);
       fwd.on('exit', () => { if (!this._closed) { this._log('ssh forward closed'); this.setStatus('error', 'Connection lost'); } });
       this.client = new OpenCodeClient({ url: `http://127.0.0.1:${localPort}`, password: this.agentKey });
@@ -374,7 +374,7 @@ class AgentSession extends BaseSession {
         else if (project.type === 'ssh') {
           const host = project.hostId ? this.mgr.store.getHost(project.hostId) : null;
           const target = resolveTarget(project, host);
-          spawn('ssh', ['-o', 'BatchMode=yes', ...sshBaseArgs(project, target), sshDest(target), script], { windowsHide: true, stdio: 'ignore' });
+          spawn('ssh', [...batchOpts(project, host), ...sshBaseArgs(project, target), sshDest(target), script], { windowsHide: true, stdio: 'ignore', env: specEnv({ env: authEnv(project, host) }) });
         }
       } catch {}
     }

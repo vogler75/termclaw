@@ -3,7 +3,7 @@
 const net = require('net');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const { buildRemoteExec, shq, posixDir } = require('./connect');
+const { buildRemoteExec, shq, posixDir, specEnv } = require('./connect');
 
 function tcpCheck(hostname, port, timeout = 3000) {
   return new Promise((resolve) => {
@@ -16,11 +16,11 @@ function tcpCheck(hostname, port, timeout = 3000) {
   });
 }
 
-function runCapture(file, args, timeout = 20000) {
+function runCapture(file, args, timeout = 20000, env) {
   return new Promise((resolve) => {
     let out = '';
     let p;
-    try { p = spawn(file, args, { windowsHide: true }); } catch (e) { return resolve({ code: -1, out: e.message }); }
+    try { p = spawn(file, args, { windowsHide: true, env: env || process.env }); } catch (e) { return resolve({ code: -1, out: e.message }); }
     const t = setTimeout(() => { try { p.kill(); } catch {} }, timeout);
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (out += d));
@@ -68,10 +68,10 @@ class HostMonitor extends EventEmitter {
     return st;
   }
 
-  // Count tmux sessions on the host (requires key-based ssh, BatchMode).
+  // Count tmux sessions on the host (key-based ssh or a stored password).
   async checkRemoteSessions(host) {
     const ex = buildRemoteExec({ type: 'ssh', keepAlive: false }, host, 'tmux ls 2>/dev/null | wc -l');
-    const r = await runCapture(ex.file, ex.args);
+    const r = await runCapture(ex.file, ex.args, undefined, specEnv(ex));
     const n = parseInt(String(r.out).trim().split(/\s+/).pop(), 10);
     const st = this.state.get(host.id) || {};
     st.remoteTmux = r.code === 0 && !Number.isNaN(n) ? n : null;
@@ -105,7 +105,7 @@ class HostMonitor extends EventEmitter {
     const ws = (host.workspace || '~/workspace').replace(/\/$/, '');
     const full = `${ws}/${relPath}`;
     const ex = buildRemoteExec({ type: 'ssh', keepAlive: false }, host, `mkdir -p ${posixDir(full)} && cd ${posixDir(full)} && pwd`);
-    const r = await runCapture(ex.file, ex.args);
+    const r = await runCapture(ex.file, ex.args, undefined, specEnv(ex));
     if (r.code !== 0) throw new Error('mkdir failed: ' + r.out.trim());
     return { path: full, absolute: r.out.trim().split('\n').pop() };
   }

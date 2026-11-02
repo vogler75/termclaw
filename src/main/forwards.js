@@ -2,7 +2,7 @@
 // Port forwarding per SSH project: one background `ssh -N -L ...` while the project has running sessions.
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
-const { buildForwardArgs } = require('./connect');
+const { buildForwardArgs, authEnv, specEnv } = require('./connect');
 
 class ForwardManager extends EventEmitter {
   constructor(store, sessions) {
@@ -45,7 +45,7 @@ class ForwardManager extends EventEmitter {
     let args;
     try { args = buildForwardArgs(p, host); } catch (e) { return; }
     const entry = { status: 'starting', error: null, forwards: p.forwards, log: '' };
-    const proc = spawn('ssh', args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    const proc = spawn('ssh', args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'], env: specEnv({ env: authEnv(p, host) }) });
     entry.proc = proc;
     proc.stderr.on('data', (d) => { entry.log = (entry.log + d).slice(-2000); });
     proc.on('error', (e) => { entry.status = 'error'; entry.error = e.message; this._emit(); });
