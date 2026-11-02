@@ -218,6 +218,9 @@ async function closeSession(id, killTmux = false) {
 
 // ---------- sidebar ----------
 function renderSidebar() {
+  // The tree is rebuilt on every render: keep its scroll position, or a click far down jumps to the top.
+  const oldTree = document.querySelector('#sidebar .tree');
+  const scrollTop = oldTree ? oldTree.scrollTop : 0;
   const sb = clear(document.getElementById('sidebar'));
   const runningCount = S.sessions.size;
   sb.appendChild(h('div', { class: 'sb-top' },
@@ -288,6 +291,8 @@ function renderSidebar() {
     navBtn('library', 'Library', (S.config.mcpLibrary || []).length || undefined),
     navBtn('settings', 'Settings'),
     h('div', { class: 'sb-version', title: 'Version and data folder: Settings', onclick: () => showView('settings') }, `TermClaw ${S.version ? 'v' + S.version : ''}`)));
+  // Only now: the bottom buttons take height from the tree, which limits how far it can scroll.
+  tree.scrollTop = scrollTop;
 }
 
 // Drag & drop in the sidebar: projects among projects, sessions within their project.
