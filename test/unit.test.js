@@ -37,7 +37,8 @@ test('ssh spawn: -t, port, keep-alive, tmux attach-or-create in directory', () =
 test('ssh spawn without tmux: cd + exec $SHELL, start command typed afterwards', () => {
   const s = buildSpawn({ ...sshProject, tmux: false, keepAlive: false, port: 22 }, null, { name: 'x', command: 'ls' });
   assert.deepStrictEqual(s.args.slice(0, 2), ['-t', 'bob@dev1']);
-  assert.strictEqual(s.args[2], `cd ~/'workspace/api' && exec "\${SHELL:-/bin/sh}" -l`);
+  assert.match(s.args[2], /^cd ~\/'workspace\/api' && \{ s=\$\{SHELL:-\}; /);
+  assert.match(s.args[2], /exec "\$s" -l; \}$/);
   assert.strictEqual(s.postStart, 'ls');
 });
 

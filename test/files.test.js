@@ -23,7 +23,7 @@ test('scripts quote paths and session ids for the remote shell', () => {
 
 test('ssh shells without tmux carry the session marker for the directory lookup', () => {
   const s = buildSpawn({ name: 'p', type: 'ssh', host: 'dev1', user: 'bob', directory: '/srv', tmux: false }, null, { id: 's-42', name: 'x' });
-  assert.match(s.args[s.args.length - 1], /^export TERMCLAW_SID='s-42'; cd '\/srv' && exec/);
+  assert.match(s.args[s.args.length - 1], /^export TERMCLAW_SID='s-42'; cd '\/srv' && \{ s=\$\{SHELL:-\}; /);
 });
 
 test('local projects: list, exists, mkdir, upload and download copy files and folders', async () => {

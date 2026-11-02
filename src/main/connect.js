@@ -25,6 +25,11 @@ function posixDir(dir) {
   return shq(dir);
 }
 
+// Starts the user's login shell. $SHELL can point to a program that is missing (set by the server's
+// environment, e.g. a wrapper that was removed): then the account's shell from passwd, else /bin/sh.
+const LOGIN_SHELL = '{ s=${SHELL:-}; [ -x "$s" ] || { s=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7); ' +
+  '[ -x "$s" ] || s=/bin/sh; echo "[termclaw] \\$SHELL (${SHELL:-unset}) not found, starting $s" >&2; }; exec "$s" -l; }';
+
 // Shell script that attaches to (or creates) a named tmux session, running `command` on creation.
 // Falls back to a plain login shell when tmux is missing on the target.
 // Mouse mode is switched on for the session (not globally), so the wheel scrolls tmux' history: tmux runs
@@ -47,13 +52,13 @@ function tmuxScript(name, dir, command) {
     `tmux has-session -t ${shq('=' + name)} 2>/dev/null || { ${create}; }; ` +
     `tmux set-option -t ${shq('=' + name + ':')} mouse on >/dev/null 2>&1; ` +
     `exec tmux attach-session -t ${shq('=' + name)}; ` +
-    `else echo '[termclaw] tmux not found, starting plain shell'; ${command ? command + '; ' : ''}exec "\${SHELL:-/bin/sh}" -l; fi`;
+    `else echo '[termclaw] tmux not found, starting plain shell'; ${command ? command + '; ' : ''}${LOGIN_SHELL}; fi`;
 }
 
 // sid: marker in the shell's environment, so file transfers can find its current directory.
 function plainScript(dir, sid) {
   const d = posixDir(dir);
-  return `${sid ? `export TERMCLAW_SID=${shq(sid)}; ` : ''}${d ? `cd ${d} && ` : ''}exec "\${SHELL:-/bin/sh}" -l`;
+  return `${sid ? `export TERMCLAW_SID=${shq(sid)}; ` : ''}${d ? `cd ${d} && ` : ''}${LOGIN_SHELL}`;
 }
 
 // Resolve connection data: a project either references a dev host or has inline host/user/port.
