@@ -57,9 +57,10 @@ function plainScript(dir, sid) {
 }
 
 // Resolve connection data: a project either references a dev host or has inline host/user/port.
+// A project on a dev host can log in as another user (hostUser); the password follows the same rule (main.js).
 function resolveTarget(project, host) {
   if (host) {
-    return { hostname: host.hostname, user: host.user, port: host.port || 22 };
+    return { hostname: host.hostname, user: (project && project.hostUser) || host.user, port: host.port || 22 };
   }
   return { hostname: project.host, user: project.user, port: project.port || 22 };
 }

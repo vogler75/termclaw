@@ -93,6 +93,8 @@ export async function editProject(ctx, p) {
   const hostSel = h('select', null, h('option', { value: '' }, '— custom connection —'), S.config.hosts.map((x) => h('option', { value: x.id, selected: p.hostId === x.id }, `${x.name} (${x.user ? x.user + '@' : ''}${x.hostname})`)));
   const host = I('host', { placeholder: 'hostname or IP' });
   const user = I('user', { placeholder: 'user' });
+  // On a dev host: log in as another user / with another password than the host's.
+  const hostUser = I('hostUser');
   const pw = sshPasswordField(ctx, isNew ? '' : 'project:' + p.id);
   const port = I('port', { type: 'number' });
   const dir = I('directory', { placeholder: 'e.g. ~/workspace/backend or C:\\Projects\\x' });
@@ -175,6 +177,7 @@ export async function editProject(ctx, p) {
   const sshOnly = [];
   const inlineOnly = [];
   const hostUserOnly = [];
+  const onHost = [];
   const posixOnly = [];
   const wslOnly = [];
   const displayOnly = [];
@@ -186,7 +189,8 @@ export async function editProject(ctx, p) {
     grp(sshOnly, ...field('Developer host', hostSel, 'Projects reference a host from the host directory')),
     grp(hostUserOnly, ...field('Host', host)),
     grp(hostUserOnly, ...field('User', user)),
-    grp(hostUserOnly, ...field('Password', ...pw.field)),
+    grp(onHost, ...field('User', hostUser)),
+    grp(sshOnly, ...field('Password', ...pw.field)),
     grp(inlineOnly, ...field('Port', port)),
     grp(sshOnly, h('label', null, 'Remote system'), h('div', null, h('div', { class: 'row' }, remoteOs, winHelp), remoteHint)),
     grp(wslOnly, ...field('WSL distribution', distro)),
@@ -228,6 +232,10 @@ export async function editProject(ctx, p) {
     inlineOnly.forEach((e) => (e.style.display = t === 'ssh' && !hostSel.value ? '' : 'none'));
     const win = t === 'ssh' && remoteOs.value === 'windows';
     hostUserOnly.forEach((e) => (e.style.display = t === 'ssh' && !hostSel.value ? '' : 'none'));
+    onHost.forEach((e) => (e.style.display = t === 'ssh' && hostSel.value ? '' : 'none'));
+    const hx = S.config.hosts.find((x) => x.id === hostSel.value);
+    hostUser.placeholder = hx ? (hx.user ? hx.user + ' (from the host)' : 'from the host / ~/.ssh/config') : '';
+    pw.setDefault(hx ? 'empty = the host’s password' : '');
     posixOnly.forEach((e) => (e.style.display = win ? 'none' : ''));
     remoteHint.textContent = win ? 'Sessions open a PowerShell on the machine (works with cmd or PowerShell as the server’s default shell). Coding agents are installed with the Windows installers. tmux, Docker, Monitor, Git, the file browser and agent sessions need Linux or macOS and are hidden.' : '';
     wslOnly.forEach((e) => (e.style.display = t === 'wsl' || (t === 'ssh' && x11.value === 'wsl') ? '' : 'none'));
@@ -263,6 +271,7 @@ export async function editProject(ctx, p) {
         hostId: type.value === 'ssh' ? hostSel.value : '',
         host: host.value.trim(),
         user: user.value.trim(),
+        hostUser: type.value === 'ssh' && hostSel.value ? hostUser.value.trim() : '',
         port: Number(port.value) || 22,
         directory: dir.value.trim(),
         wslDistro: distro.value.trim(),
@@ -299,7 +308,7 @@ export async function editProject(ctx, p) {
         agentSetup: agentSection.get(),
       };
       const saved = await call('saveProject', out);
-      if (out.type === 'ssh' && !out.hostId) await pw.apply('project:' + saved.id);
+      if (out.type === 'ssh') await pw.apply('project:' + saved.id);
       ctx.S.projectId = saved.id;
       ctx.S.view = 'project';
       const idx = ctx.S.config.projects.findIndex((x) => x.id === saved.id);
@@ -371,7 +380,10 @@ function sshPasswordField(ctx, key) {
   const stored = !!key && (ctx.S.config.storedPasswords || []).includes(key);
   const input = h('input', { type: 'password', autocomplete: 'new-password', style: { flex: '1' }, placeholder: stored ? '•••••••• stored (type to replace)' : 'optional, SSH keys are preferred' });
   const forget = h('input', { type: 'checkbox' });
+  const emptyText = 'optional, SSH keys are preferred';
   return {
+    // Placeholder when nothing is stored, e.g. that the host's password applies.
+    setDefault: (text) => { if (!stored) input.placeholder = text || emptyText; },
     // field('Password', ...pw.field): input row and hint as separate grid cells, aligned like the other fields
     field: [h('div', { class: 'row' }, input, stored ? h('label', { class: 'row', style: { flex: 'none' } }, forget, 'Forget') : null),
       'Stored encrypted on this computer and never exported. Typed in at the password prompt of a terminal, and used for Docker, Monitor, Git and files.'],

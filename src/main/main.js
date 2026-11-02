@@ -80,8 +80,8 @@ function notify(title, body, onClick) {
 function setup() {
   const dataDir = app.getPath('userData');
   store = new Store(dataDir);
-  // Stored ssh passwords: a host's password for projects on that host, else the project's own.
-  setAskpass({ file: askpass.install(dataDir), lookup: (project, host) => storedPassword(host ? 'host:' + host.id : project && project.id ? 'project:' + project.id : '') });
+  // Stored ssh passwords: the project's own (also an override on a dev host), else the host's.
+  setAskpass({ file: askpass.install(dataDir), lookup: (project, host) => storedPassword(project && project.id ? 'project:' + project.id : '') || (host ? storedPassword('host:' + host.id) : '') });
   audit = new AuditLog(dataDir);
   sessions = new SessionManager(store);
   sessions.agentFactory = (mgr, project, opts) => new AgentSession(mgr, project, opts);
@@ -199,11 +199,11 @@ const api = {
     const before = p.id ? store.getProject(p.id) : null;
     const saved = store.saveProject(p);
     if (before && JSON.stringify(before.forwards) !== JSON.stringify(saved.forwards)) forwards.restart(saved.id);
-    const conn = (x) => JSON.stringify([x.type, x.hostId, x.host, x.user, x.port, x.wslDistro, x.docker]);
+    const conn = (x) => JSON.stringify([x.type, x.hostId, x.host, x.user, x.hostUser, x.port, x.wslDistro, x.docker]);
     if (before && conn(before) !== conn(saved)) docker.reset(saved.id);
-    const mconn = (x) => JSON.stringify([x.type, x.hostId, x.host, x.user, x.port, x.wslDistro, x.monitor]);
+    const mconn = (x) => JSON.stringify([x.type, x.hostId, x.host, x.user, x.hostUser, x.port, x.wslDistro, x.monitor]);
     if (before && mconn(before) !== mconn(saved)) monitor.reset(saved.id);
-    const gconn = (x) => JSON.stringify([x.type, x.hostId, x.host, x.user, x.port, x.wslDistro, x.directory, x.git]);
+    const gconn = (x) => JSON.stringify([x.type, x.hostId, x.host, x.user, x.hostUser, x.port, x.wslDistro, x.directory, x.git]);
     if (before && gconn(before) !== gconn(saved)) git.reset(saved.id);
     return saved;
   },

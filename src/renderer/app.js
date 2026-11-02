@@ -468,7 +468,7 @@ function renderProject(main) {
   main.appendChild(h('div', { class: 'main-head' },
     dot(projectStatus(p.id), { 'data-pdot': p.id }),
     h('span', { class: 'title' }, p.name),
-    h('span', { class: 'muted' }, [p.type.toUpperCase(), host ? `${host.user ? host.user + '@' : ''}${host.hostname}` : p.host, p.wslDistro, p.directory, p.tmux ? 'tmux' : null].filter(Boolean).join(' · ')),
+    h('span', { class: 'muted' }, [p.type.toUpperCase(), host ? `${p.hostUser || host.user ? (p.hostUser || host.user) + '@' : ''}${host.hostname}` : p.host, p.wslDistro, p.directory, p.tmux ? 'tmux' : null].filter(Boolean).join(' · ')),
     forwardInfo(p),
     h('div', { class: 'spacer' }),
     h('span', { class: 'split-btn' },

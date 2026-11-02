@@ -74,3 +74,12 @@ test('askpass helper answers password prompts only', () => {
   assert.strictEqual(runHelper(file, 'Are you sure you want to continue connecting (yes/no/[fingerprint])? ', pw).code, 1);
   assert.strictEqual(runHelper(file, "bob@box's password: ", '').code, 1);
 });
+
+test('a project on a dev host can log in as another user', () => {
+  const host = { id: 'h1', hostname: 'devbox', user: 'bob', port: 22 };
+  const onHost = { id: 'p3', type: 'ssh', hostId: 'h1', user: 'stale-inline-user', tmux: false };
+  assert.strictEqual(connect.resolveTarget(onHost, host).user, 'bob', 'the old inline user field is not an override');
+  const ex = connect.buildRemoteExec({ ...onHost, hostUser: 'alice' }, host, 'true');
+  assert.ok(ex.args.includes('alice@devbox'));
+  assert.strictEqual(connect.resolveTarget({ type: 'ssh', host: 'box', user: 'carol', hostUser: 'x' }, null).user, 'carol');
+});
