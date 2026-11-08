@@ -107,7 +107,7 @@ const config = {
     await page.getByRole('button', { name: 'Tabs', exact: true }).click();
 
     // 4) Overview
-    await page.click('#sidebar button:has-text("Overview")');
+    await page.keyboard.press('Control+Shift+O');
     await shot('overview');
 
     // 5) File browser

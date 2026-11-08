@@ -159,7 +159,7 @@ const cfgBase = () => {
 
   // ---------------- Phase 2 ----------------
   await step('P2 create, edit and delete a project in the UI; saved as JSON', async () => {
-    await page.click('text=+ Project');
+    await page.click('#sidebar button[title="New project"]');
     const modal = page.locator('.modal');
     await modal.locator('input').first().fill('ui-projekt');
     // An accidental click outside the dialog must not close it.
@@ -233,7 +233,7 @@ const cfgBase = () => {
 
   await step('P5 BEL sets status to waiting immediately; desktop notification', async () => {
     await app.evaluate(() => { globalThis.__termclaw.store.getProject('p-local').thresholdSec = 30; });
-    await page.click('#sidebar button:has-text("Overview")'); // not focused on the session -> notification expected
+    await page.keyboard.press('Control+Shift+O'); // not focused on the session -> notification expected
     const n0 = await app.evaluate(() => globalThis.__termclaw.notificationLog.length);
     await m.send(ids.local, IS_WIN ? 'Start-Sleep 1; Write-Host "bell$([char]7)"' : 'sleep 1; printf "bell\\a\\n"');
     await waitFor(async () => (await m.status(ids.local)) === 'working', { msg: 'working', timeout: 5000 });
@@ -255,7 +255,8 @@ const cfgBase = () => {
 
   // ---------------- Phase 4 ----------------
   await step('P4 tabs, tiles (2/3/4) and click back to single view', async () => {
-    await page.click('#main button:has-text("▶ All")');
+    await page.click('#main button[title="More actions"]');
+    await page.click('.menu div:has-text("Start all terminals")');
     await waitFor(async () => (await m.sessions()).filter((s) => s.projectId === 'p-local').length === 3, { msg: '3 sessions' });
     await page.waitForSelector('.tabs .tab >> nth=2');
     await page.click('#main .main-head button:has-text("Tiles")');
@@ -277,7 +278,7 @@ const cfgBase = () => {
   });
 
   await step('P4 overview groups per project; scaling via font size; click opens session', async () => {
-    await page.click('#sidebar button:has-text("Overview")');
+    await page.keyboard.press('Control+Shift+O');
     await page.waitForSelector('.ov-group');
     const groups = await page.$$eval('.ov-group .ov-head', (els) => els.map((e) => e.textContent));
     assert.ok(groups.some((g) => g.includes('lokal')));
@@ -1044,7 +1045,7 @@ const cfgBase = () => {
     fs.mkdirSync(work, { recursive: true });
     await app.evaluate((_e, a) => { if (!globalThis.__termclaw.store.getProject('p-acp')) globalThis.__termclaw.store.saveProject({ id: 'p-acp', name: 'acp', type: 'local', tmux: false, directory: a.work }); else globalThis.__termclaw.store.getProject('p-acp').directory = a.work; }, { work });
     await page.click('#sidebar .proj-name:text("acp")');
-    await page.click('#main .main-head button:has-text("+ Agent")');
+    await page.click('#main .main-head button[title="New session or agent"]');
     await page.click(`.menu div:has-text("${label}")`);
     const id = await waitFor(async () => (await m.sessions()).find((s) => s.projectId === 'p-acp' && s.kind === 'acp' && s.name.startsWith(agent))?.id, { msg: 'acp session' });
     await waitFor(async () => (await m.status(id)) === 'waiting', { msg: `${agent} ready`, timeout: 90000 });
@@ -1323,7 +1324,7 @@ const cfgBase = () => {
     await page.keyboard.press('ControlOrMeta+Shift+KeyO');
     await page.waitForSelector('.ov-group');
     await page.keyboard.press('ControlOrMeta+Digit1');
-    await page.waitForSelector('#main .main-head .title:text("lokal")');
+    await page.waitForSelector('#sidebar .proj.selected .proj-name:text("lokal")');
     const before = await app.evaluate(() => globalThis.__termclaw.store.getProject('p-local').layout.mode);
     await page.keyboard.press('ControlOrMeta+Shift+KeyG');
     await waitFor(async () => (await app.evaluate(() => globalThis.__termclaw.store.getProject('p-local').layout.mode)) !== before, { msg: 'Ctrl+Shift+G toggled tiles' });

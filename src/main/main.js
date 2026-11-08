@@ -657,7 +657,7 @@ function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 500,
-    backgroundColor: '#14161b',
+    backgroundColor: '#141414',
     title: 'TermClaw',
     icon: path.join(__dirname, 'icon.png'), // packaged Windows/macOS builds take the exe/app icon from build/
     webPreferences: {

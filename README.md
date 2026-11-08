@@ -38,14 +38,14 @@ Requirements on the machines you connect to: `ssh` with key authentication (your
 - **Right:** the project's sessions as **tabs** or **tiles** (2 = side by side, 3 = three columns or one large + two small, 4 = 2×2, more = grid). Clicking a tile header returns to the single view.
 - **Overview:** all running sessions of all projects, grouped per project. Tiles shrink via the font size, so text stays sharp. Click a tile to open the session.
 - **Status:** *working* (output within the last *n* seconds) and *waiting* (no output for longer than the threshold — default 5 s, per project — or a bell character). Agent sessions report their status exactly. Switching to *waiting* sends a desktop notification; clicking it opens the session.
-- **Local shells:** the **▾** next to **+ Session** opens a shell on this computer in any project, also next to SSH sessions: the project's own local shell (set under *Local shell* in the project editor: shell and directory) and every shell found here — Windows PowerShell, PowerShell 7, Command Prompt, Git Bash and each WSL distribution on Windows; the shells from /etc/shells on macOS and Linux. These start in the home directory, without tmux or the project's default command, and are marked *local*.
+- **Local shells:** the **▾** next to the **+** after the tabs opens a shell on this computer in any project, also next to SSH sessions: the project's own local shell (set under *Local shell* in the project editor: shell and directory) and every shell found here — Windows PowerShell, PowerShell 7, Command Prompt, Git Bash and each WSL distribution on Windows; the shells from /etc/shells on macOS and Linux. These start in the home directory, without tmux or the project's default command, and are marked *local*.
 - **Color schemes:** TermClaw (default), One Dark, Dracula, Tokyo Night, Nord, Gruvbox Dark, Solarized Dark / Light, GitHub Light and High contrast. The default for all terminals is set in *Settings*, a project can use its own (project editor, e.g. to tell production machines apart), and a single session can override both (session context menu → *Color scheme…*, previewed while you pick). *Settings → Increase contrast* adjusts text colors that are hard to read on their background, such as `ls`' blue on green.
-- **Saved commands** per project appear as buttons above the terminal and run in the active session. **▶ All** starts all terminals configured for the project.
+- **Saved commands** per project appear as buttons above the terminal and run in the active session. **Start all terminals** in the **⋯** menu starts all terminals configured for the project.
 - Sessions stay connected when you switch projects. Open sessions, view mode and tile layout are restored on restart; with tmux the app re-attaches to the sessions that kept running.
 
 ![Overview of all sessions](docs/screenshots/overview.png)
 
-The project editor sets the connection (local, SSH, WSL, or a developer host), start directory, tmux, auto-reconnect, status threshold, the default session and its type (terminal, OpenCode, OpenCode via ACP, Copilot via ACP, custom ACP agent), the terminals for **▶ All**, saved commands, port forwards and the coding agent setup.
+The project editor sets the connection (local, SSH, WSL, or a developer host), start directory, tmux, auto-reconnect, status threshold, the default session and its type (terminal, OpenCode, OpenCode via ACP, Copilot via ACP, custom ACP agent), the terminals for **Start all terminals**, saved commands, port forwards and the coding agent setup.
 
 ![Project editor](docs/screenshots/project-editor.png)
 
@@ -89,7 +89,7 @@ WSLg's X server is only reachable from inside WSL, so the *Through WSL* setting 
 
 ![Agent session with Markdown answer, tool calls, model, mode, approvals and token usage](docs/screenshots/agent-chat.png)
 
-**+ Agent ▾** in the project header starts a structured agent session with a chat view:
+The **▾** next to the **+** after the tabs also starts a structured agent session with a chat view:
 
 - **OpenCode (server API):** `opencode serve` over HTTP.
 - **OpenCode via ACP** (`opencode acp`), **GitHub Copilot via ACP** (`copilot --acp`), or any other **ACP agent** you enter as a command in the project editor.

@@ -217,16 +217,33 @@ async function closeSession(id, killTmux = false) {
 }
 
 // ---------- sidebar ----------
+const svgIcon = (body) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const ICONS = {
+  hosts: svgIcon('<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>'),
+  orch: svgIcon('<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>'),
+  mcp: svgIcon('<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>'),
+  library: svgIcon('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>'),
+  audit: svgIcon('<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>'),
+  settings: svgIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
+  plus: svgIcon('<path d="M12 5v14M5 12h14"/>'),
+};
+const icon = (name) => h('span', { class: 'ico', html: ICONS[name] });
+
 function renderSidebar() {
   // The tree is rebuilt on every render: keep its scroll position, or a click far down jumps to the top.
   const oldTree = document.querySelector('#sidebar .tree');
   const scrollTop = oldTree ? oldTree.scrollTop : 0;
   const sb = clear(document.getElementById('sidebar'));
-  const runningCount = S.sessions.size;
-  sb.appendChild(h('div', { class: 'sb-top' },
-    h('button', { class: S.view === 'overview' ? 'active' : '', title: 'Overview of all sessions (Ctrl+Shift+O)', onclick: () => showView('overview') }, '▦ Overview ', h('span', { class: 'muted' }, runningCount)),
-    h('button', { title: 'New project', onclick: () => pages.editProject(ctx, null) }, '+ Project')));
-  sb.appendChild(h('div', { class: 'sb-section' }, 'Projects'));
+  const orchRunning = S.orchestrators.filter((o) => o.state !== 'stopped').length;
+  const navBtn = (view, ico, label, count, countClass) => h('button', { class: S.view === view ? 'active' : '', onclick: () => showView(view) }, icon(ico), label, count !== undefined ? h('span', { class: 'count' + (countClass ? ' ' + countClass : '') }, count) : null);
+  sb.appendChild(h('div', { class: 'sb-nav' },
+    navBtn('hosts', 'hosts', 'Hosts', S.config.hosts.length),
+    navBtn('orch', 'orch', 'Orchestrators', orchRunning || undefined),
+    navBtn('mcp', 'mcp', 'MCP', S.mcp.running ? '●' : '○', S.mcp.running ? 'running' : ''),
+    navBtn('library', 'library', 'Library', (S.config.mcpLibrary || []).length || undefined),
+    navBtn('audit', 'audit', 'Audit log')));
+  sb.appendChild(h('div', { class: 'sb-section' }, 'Projects',
+    h('button', { class: 'icon', title: 'New project', onclick: () => pages.editProject(ctx, null) }, icon('plus'))));
 
   const tree = h('div', { class: 'tree' });
   S.config.projects.forEach((p, idx) => {
@@ -277,19 +294,12 @@ function renderSidebar() {
     tree.appendChild(node);
   });
   if (!S.config.projects.length) {
-    tree.appendChild(h('div', { style: { padding: '12px', color: 'var(--fg3)' } }, 'No projects yet. Create one with “+ Project”.'));
+    tree.appendChild(h('div', { style: { padding: '12px', color: 'var(--fg3)' } }, 'No projects yet. Create one with the + above.'));
   }
   sb.appendChild(tree);
 
-  const orchRunning = S.orchestrators.filter((o) => o.state !== 'stopped').length;
-  const navBtn = (view, label, count, countClass) => h('button', { class: S.view === view ? 'active' : '', onclick: () => showView(view) }, label, count !== undefined ? h('span', { class: 'count' + (countClass ? ' ' + countClass : '') }, count) : null);
   sb.appendChild(h('div', { class: 'sb-bottom' },
-    navBtn('hosts', 'Hosts', S.config.hosts.length),
-    navBtn('orch', 'Orchestrators', orchRunning || undefined),
-    navBtn('mcp', 'MCP', S.mcp.running ? '●' : '○', S.mcp.running ? 'running' : ''),
-    navBtn('audit', 'Audit log'),
-    navBtn('library', 'Library', (S.config.mcpLibrary || []).length || undefined),
-    navBtn('settings', 'Settings'),
+    h('button', { class: 'icon' + (S.view === 'settings' ? ' active' : ''), title: 'Settings', onclick: () => showView('settings') }, icon('settings')),
     h('div', { class: 'sb-version', title: 'Version and data folder: Settings', onclick: () => showView('settings') }, `TermClaw ${S.version ? 'v' + S.version : ''}`)));
   // Only now: the bottom buttons take height from the tree, which limits how far it can scroll.
   tree.scrollTop = scrollTop;
@@ -388,8 +398,8 @@ async function browseFrom(s) {
 }
 
 // Structured agent sessions: OpenCode server API or any agent via ACP.
-// Session ▾: the default session, the project's local shell and every shell found on this computer.
-async function sessionTypeMenu(e, p) {
+// ▾ next to +: the default session, the project's local shell, every shell found on this computer, and the agents.
+async function newSessionMenu(e, p) {
   const r = e.currentTarget.getBoundingClientRect();
   if (!S.localShells) S.localShells = await call('localShells').catch(() => []);
   const ls = p.localShell || {};
@@ -400,19 +410,22 @@ async function sessionTypeMenu(e, p) {
     '-',
     ...S.localShells.map((x) => ({ label: x.label, action: () => openSession(p.id, { shell: { id: x.id } }) })),
     '-',
-    { label: 'Configure local shell…', action: () => pages.editProject(ctx, p) },
-  ]);
-}
-
-function agentMenu(e, p) {
-  const r = e.currentTarget.getBoundingClientRect();
-  contextMenu(r.left, r.bottom + 2, [
     { label: 'OpenCode (server API)', action: () => openSession(p.id, { kind: 'agent', name: 'agent', command: '' }) },
-    '-',
     { label: 'OpenCode via ACP', action: () => openSession(p.id, { kind: 'acp', acpAgent: 'opencode', name: 'opencode', command: '' }) },
     { label: 'GitHub Copilot via ACP', action: () => openSession(p.id, { kind: 'acp', acpAgent: 'copilot', name: 'copilot', command: '' }) },
     ...(p.acpCommands && p.acpCommands.custom ? [{ label: `Other ACP agent: ${p.acpCommands.custom}`, action: () => openSession(p.id, { kind: 'acp', acpAgent: 'custom', name: 'acp-agent', command: '' }) }] : []),
-    { label: 'Configure agent commands…', action: () => pages.editProject(ctx, p) },
+    '-',
+    { label: 'Configure shells and agents…', action: () => pages.editProject(ctx, p) },
+  ]);
+}
+
+// ⋯ in the project bar: actions on all sessions of the project.
+function projectActionsMenu(e, p) {
+  const r = e.currentTarget.getBoundingClientRect();
+  contextMenu(r.left, r.bottom + 2, [
+    ...((p.terminals || []).length ? [{ label: 'Start all terminals', action: () => startAll(p.id) }] : []),
+    ...(anyConnected(p.id) ? [{ label: 'Disconnect all sessions', action: () => call('disconnectProject', p.id) }] : []),
+    ...(anyStopped(p.id) ? [{ label: 'Reconnect all sessions', action: () => call('reconnectProject', p.id) }] : []),
   ]);
 }
 
@@ -479,25 +492,39 @@ function renderProject(main) {
   const host = p.hostId ? S.config.hosts.find((x) => x.id === p.hostId) : null;
   const m = mode(p);
   const ax = activeExtra(p);
-  main.appendChild(h('div', { class: 'main-head' },
-    dot(projectStatus(p.id), { 'data-pdot': p.id }),
-    h('span', { class: 'title' }, p.name),
-    h('span', { class: 'muted' }, [p.type.toUpperCase(), host ? `${p.hostUser || host.user ? (p.hostUser || host.user) + '@' : ''}${host.hostname}` : p.host, p.wslDistro, p.directory, p.tmux ? 'tmux' : null].filter(Boolean).join(' · ')),
-    forwardInfo(p),
+  // One bar: the tabs on the left, the project's actions on the right. Without tabs (tiles, no sessions) the project name takes their place.
+  const showTabs = (list.length || extrasOn(p).length) && !(m === 'tiles' && list.length > 1 && !ax);
+  const aid = ax ? null : activeSessionId(p.id);
+  main.appendChild(h('div', { class: 'main-head proj-bar' },
+    showTabs ? h('div', { class: 'tabs', onwheel: (e) => { e.currentTarget.scrollLeft += e.deltaY; } },
+      extrasOn(p).map((x) => h('div', { class: 'tab dk-tab' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) }, h('span', { style: { fontSize: '12px' } }, x.glyph(p)), x.label)),
+      list.map((s) => h('div', {
+        class: 'tab' + (s.id === aid ? ' active' : ''),
+        onclick: () => selectSession(s.id),
+        ondblclick: () => renameSession(s.id),
+        onauxclick: (e) => { if (e.button === 1) closeSession(s.id); },
+        oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e, s); },
+        title: s.shell ? `Local shell: ${s.shell.label}${s.shell.dir ? ' · ' + s.shell.dir : ''}` : null,
+      }, dot(s.status, { 'data-dot': s.id }), s.shell ? h('span', { class: 'local-tag', title: 'Local shell on this computer' }, '⌂') : null, s.name, h('span', { class: 'x', title: 'Close', onclick: (e) => { e.stopPropagation(); closeSession(s.id); } }, '×'))))
+      : [
+        dot(projectStatus(p.id), { 'data-pdot': p.id }),
+        h('span', { class: 'title' }, p.name),
+        h('span', { class: 'muted' }, [p.type.toUpperCase(), host ? `${p.hostUser || host.user ? (p.hostUser || host.user) + '@' : ''}${host.hostname}` : p.host, p.wslDistro, p.directory, p.tmux ? 'tmux' : null].filter(Boolean).join(' · ')),
+      ],
+    h('button', { class: 'icon tab-add', title: 'New session (Ctrl+Shift+T)', onclick: () => openSession(p.id) }, '+'),
+    h('button', { class: 'icon', title: 'New session or agent', onclick: (e) => newSessionMenu(e, p) }, '▾'),
     h('div', { class: 'spacer' }),
-    h('span', { class: 'split-btn' },
-      h('button', { onclick: () => openSession(p.id), title: 'New session with the default configuration (Ctrl+Shift+T)' }, '+ Session'),
-      h('button', { onclick: (e) => sessionTypeMenu(e, p), title: 'Local shells on this computer and the project’s local shell' }, '▾')),
-    h('button', { onclick: (e) => agentMenu(e, p), title: 'Start a structured agent session (chat view)' }, '+ Agent ▾'),
-    (p.terminals || []).length ? h('button', { onclick: () => startAll(p.id), title: 'Start all configured terminals' }, '▶ All') : null,
-    list.length && !anyConnected(p.id) ? h('button', { onclick: () => call('reconnectProject', p.id), title: 'Reconnect all sessions of this project' }, 'Reconnect')
-      : list.length ? h('button', { onclick: () => call('disconnectProject', p.id), title: 'Close the connections of all sessions; tmux sessions and remote agents keep running. Reconnect brings them back.' }, 'Disconnect') : null,
+    forwardInfo(p),
     h('button', { class: m === 'tabs' ? 'active' : '', onclick: () => setMode(p, 'tabs') }, 'Tabs'),
     h('button', { class: m === 'tiles' ? 'active' : '', onclick: () => setMode(p, 'tiles'), title: 'Tile view (Ctrl+Shift+G)' }, 'Tiles'),
     h('button', { title: 'Browse files on the project machine, upload and download (or drop files onto a terminal)', onclick: () => { const sid = activeSessionId(p.id); const s = sid && S.sessions.get(sid); s ? browseFrom(s) : files.openBrowser(ctx, p.id); } }, 'Files'),
-    extrasOn(p).map((x) => h('button', { class: ax === x ? 'active' : '', title: x.title, onclick: () => (ax === x && list.length ? selectSession(activeSessionId(p.id)) : showExtra(p.id, x.key)) }, x.label)),
+    showTabs ? null : extrasOn(p).map((x) => h('button', { title: x.title, onclick: () => showExtra(p.id, x.key) }, x.label)),
     h('button', { title: 'Install coding agents, deploy MCP servers and skills', onclick: (e) => agents.agentsMenu(ctx, e, p, activeSessionId(p.id)) }, 'Agents ▾'),
+    (p.terminals || []).length || list.length ? h('button', { class: 'icon', title: 'More actions', onclick: (e) => projectActionsMenu(e, p) }, '⋯') : null,
     h('button', { class: 'icon', title: 'Edit project', onclick: () => pages.editProject(ctx, p) }, '⚙')));
+
+  // The bar is rebuilt on every render and its scrollbar is hidden: keep the active tab in view.
+  main.querySelector('.proj-bar .tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
   if ((p.commands || []).length) {
     const aid = activeSessionId(p.id);
@@ -521,17 +548,6 @@ function renderProject(main) {
 
   if (m === 'tiles' && list.length > 1 && !ax) return renderTiles(main, p, list);
 
-  const aid = ax ? null : activeSessionId(p.id);
-  main.appendChild(h('div', { class: 'tabs' },
-    extrasOn(p).map((x) => h('div', { class: 'tab dk-tab' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) }, h('span', { style: { fontSize: '12px' } }, x.glyph(p)), x.label)),
-    list.map((s) => h('div', {
-    class: 'tab' + (s.id === aid ? ' active' : ''),
-    onclick: () => selectSession(s.id),
-    ondblclick: () => renameSession(s.id),
-    onauxclick: (e) => { if (e.button === 1) closeSession(s.id); },
-    oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e, s); },
-    title: s.shell ? `Local shell: ${s.shell.label}${s.shell.dir ? ' · ' + s.shell.dir : ''}` : null,
-  }, dot(s.status, { 'data-dot': s.id }), s.shell ? h('span', { class: 'local-tag', title: 'Local shell on this computer' }, '⌂') : null, s.name, h('span', { class: 'x', title: 'Close', onclick: (e) => { e.stopPropagation(); closeSession(s.id); } }, '×')))));
   const content = h('div', { class: 'content' });
   main.appendChild(content);
   if (ax) { extraShown = ax.key; ax.mod.mount(ctx, content, p.id); return; }

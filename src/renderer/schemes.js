@@ -13,7 +13,7 @@ export const SCHEMES = [
   {
     id: 'default', name: 'TermClaw (default)',
     theme: {
-      background: '#14161b', foreground: '#d7dae0', cursor: '#5b9dff', selectionBackground: '#3a4a6b',
+      background: '#141414', foreground: '#e4e4e4', cursor: '#5b9dff', selectionBackground: '#3a4a6b',
       ...ansi(['#1b1e25', '#f85149', '#3fb950', '#e3b341', '#5b9dff', '#bc8cff', '#39c5cf', '#d7dae0'],
         ['#6b7280', '#ff7b72', '#56d364', '#f2cc60', '#79b8ff', '#d2a8ff', '#56d4dd', '#ffffff']),
     },
