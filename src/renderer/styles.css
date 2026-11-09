@@ -59,21 +59,24 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .sb-section { padding: 12px 8px 6px 16px; color: var(--fg2); font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
 .sb-section button.icon { padding: 3px; }
 .tree { flex: 1; overflow-y: auto; padding-bottom: 8px; }
-.proj { margin: 2px 8px; border-radius: var(--radius); }
-.proj + .proj { margin-top: 10px; }
-/* A project's items hang off a guide line below its caret; their dots line up with the project's name. */
-.proj-children { margin: 2px 0 0 13px; padding-left: 18px; border-left: 1px solid var(--bg4); }
+/* Each project is one card, and the only outlined box in the tree. */
+.proj { margin: 0 8px; padding: 2px; border: 1px solid var(--border); border-radius: 10px; }
+.proj + .proj { margin-top: 6px; }
+.proj.selected { background: var(--bg3); border-color: #444; }
+/* Item dots line up with the project's name. */
+.proj-children { margin: 0 0 3px 14px; }
 .proj-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; user-select: none; }
 .proj-head:hover { background: var(--bg3); }
-.proj.selected > .proj-head { background: var(--bg3); }
+.proj.selected > .proj-head:hover, .proj.selected .sess:hover { background: var(--bg4); }
 .proj-name { flex: 1; font-size: 14px; font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-type { font-size: 10px; color: var(--fg3); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
 .proj-actions { display: none; gap: 0; }
-.proj-head:hover .proj-actions, .proj.selected .proj-actions { display: flex; }
-.caret { width: 12px; color: var(--fg3); font-size: 10px; }
+.proj-head:hover .proj-actions { display: flex; }
+.caret { width: 12px; flex: none; text-align: center; color: var(--fg3); font-size: 10px; }
 .sess { display: flex; align-items: center; gap: 6px; margin-top: 1px; padding: 3px 8px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; color: var(--fg2); font-size: 12px; }
 .sess:hover { background: var(--bg3); }
-.sess.active { background: var(--bg3); border-color: #404040; color: var(--fg); }
+.sess.active { background: var(--bg3); color: #fff; }
+.proj.selected .sess.active { background: var(--bg4); }
 .sess-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess .badge { font-size: 9px; padding: 0 3px; border-radius: 3px; background: var(--bg4); color: var(--fg2); }
 .sb-bottom { border-top: 1px solid var(--border); padding: 6px 8px; display: flex; align-items: center; gap: 2px; }

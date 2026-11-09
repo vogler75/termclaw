@@ -258,14 +258,14 @@ function renderSidebar() {
       onclick: () => { S.projectId = p.id; S.view = 'project'; render(); focusActive(); },
       oncontextmenu: (e) => { e.preventDefault(); projectMenu(e, p); },
     },
-    h('span', { class: 'caret', onclick: (e) => { e.stopPropagation(); collapsed ? S.collapsed.delete(p.id) : S.collapsed.add(p.id); renderSidebar(); } }, list.length || extrasOn(p).length ? (collapsed ? '▸' : '▾') : ''),
     dot(projectStatus(p.id), { 'data-pdot': p.id }),
     h('span', { class: 'proj-name' }, p.name),
-    h('span', { class: 'proj-type' }, p.type === 'ssh' ? (host ? host.name : 'ssh') : p.type),
+    p.type !== 'local' && h('span', { class: 'proj-type' }, p.type === 'ssh' ? (host ? host.name : 'ssh') : p.type),
     h('span', { class: 'proj-actions' },
       h('button', { class: 'icon', title: 'New session (default)', onclick: (e) => { e.stopPropagation(); openSession(p.id); } }, '+'),
       h('button', { class: 'icon', title: 'Tile view', onclick: (e) => { e.stopPropagation(); S.projectId = p.id; S.view = 'project'; setMode(p, mode(p) === 'tiles' ? 'tabs' : 'tiles'); } }, '▦'),
-      h('button', { class: 'icon', title: 'Edit project', onclick: (e) => { e.stopPropagation(); pages.editProject(ctx, p); } }, '⚙')));
+      h('button', { class: 'icon', title: 'Edit project', onclick: (e) => { e.stopPropagation(); pages.editProject(ctx, p); } }, '⚙')),
+    h('span', { class: 'caret', onclick: (e) => { e.stopPropagation(); collapsed ? S.collapsed.delete(p.id) : S.collapsed.add(p.id); renderSidebar(); } }, list.length || extrasOn(p).length ? (collapsed ? '▸' : '▾') : ''));
     const node = h('div', { class: 'proj' + (selected ? ' selected' : '') }, head);
     if (!collapsed) {
       const ax = selected ? activeExtra(p) : null;
