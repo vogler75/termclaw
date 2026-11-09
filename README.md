@@ -237,7 +237,7 @@ npm install
 npm start
 ```
 
-On Windows, `build.bat` does all steps: `build.bat` builds the installer, portable exe and unpacked app, `build.bat dir` only the unpacked app (`release\win-unpacked`), `build.bat test` runs the unit tests first. Packages for one platform: `npm run dist:win` or `npm run dist:mac` (macOS packages must be built on a Mac).
+On Windows, `build.bat` does all steps: `build.bat` builds the installer, portable exe and unpacked app, `build.bat dir` only the unpacked app (`win-unpacked`), `build.bat test` runs the unit tests first. The output goes to `%USERPROFILE%\termclaw-release`, or to the folder in `TERMCLAW_RELEASE_DIR`. Packages for one platform: `npm run dist:win` or `npm run dist:mac` (macOS packages must be built on a Mac).
 
 Tests:
 

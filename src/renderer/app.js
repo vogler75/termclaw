@@ -269,13 +269,15 @@ function renderSidebar() {
     const node = h('div', { class: 'proj' + (selected ? ' selected' : '') }, head);
     if (!collapsed) {
       const ax = selected ? activeExtra(p) : null;
+      const children = h('div', { class: 'proj-children' });
+      if (list.length || extrasOn(p).length) node.appendChild(children);
       for (const x of extrasOn(p)) {
-        node.appendChild(h('div', { class: 'sess dk-sess' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) },
+        children.appendChild(h('div', { class: 'sess dk-sess' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) },
           h('span', { class: 'dk-sess-icon' }, x.glyph(p)), h('span', { class: 'sess-name' }, x.label)));
       }
       for (const s of list) {
         const isActive = selected && activeSessionId(p.id) === s.id;
-        node.appendChild(h('div', {
+        children.appendChild(h('div', {
           class: 'sess' + (isActive ? ' active' : ''),
           ...dragProps({ type: 'session', id: s.id, projectId: p.id }),
           title: `${s.name} — ${STATUS_LABEL[s.status] || s.status}${s.command ? ' — ' + s.command : ''}`,
