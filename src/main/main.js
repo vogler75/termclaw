@@ -398,21 +398,24 @@ const api = {
   openDataDir: () => shell.openPath(app.getPath('userData')),
   detectOpencode: () => findOpencode(store.settings.opencodePath),
   copy: (text) => clipboard.writeText(String(text)),
-  // An image on the clipboard (screenshot, copied picture) saved as PNG for pasting into a terminal;
-  // null without an image. Pastes older than a week are removed.
-  clipboardImage: async () => {
-    // Electron 45 clipboard: W3C style items; screenshots arrive as image/png
-    const item = (await clipboard.read()).find((it) => it.types.includes('image/png'));
-    if (!item) return null;
-    const png = Buffer.from(await (await item.getType('image/png')).arrayBuffer());
+  // Paste into the focused element: the renderer's paste event then carries text, files and images.
+  paste: () => { if (win) win.webContents.paste(); },
+  // Image data pasted or dropped into a terminal, saved as a file whose path is typed in. The name comes
+  // from the content, so the same picture is one file. Pastes older than a week are removed.
+  saveImage: (bytes, mime) => {
+    const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp' }[mime];
+    if (!ext) throw new Error('not a supported image: ' + (mime || 'unknown type'));
+    const buf = Buffer.from(bytes || []);
+    if (!buf.length) throw new Error('the image is empty');
+    if (buf.length > 64 * 1024 * 1024) throw new Error('the image is larger than 64 MB');
     const dir = path.join(app.getPath('temp'), 'termclaw-paste');
     fs.mkdirSync(dir, { recursive: true });
     for (const f of fs.readdirSync(dir)) {
       try { const p = path.join(dir, f); if (Date.now() - fs.statSync(p).mtimeMs > 7 * 86400e3) fs.unlinkSync(p); } catch {}
     }
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
-    const file = path.join(dir, `paste-${stamp}-${Math.random().toString(36).slice(2, 6)}.png`);
-    fs.writeFileSync(file, png);
+    const file = path.join(dir, `paste-${crypto.createHash('sha256').update(buf).digest('hex').slice(0, 16)}.${ext}`);
+    if (fs.existsSync(file)) fs.utimesSync(file, new Date(), new Date());
+    else fs.writeFileSync(file, buf);
     return file;
   },
   openExternal: (url) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); },

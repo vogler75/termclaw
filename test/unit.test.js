@@ -318,3 +318,15 @@ test('git: actions run in a real repository (local git)', async (t) => {
   await assert.rejects(mgr.createBranch('p', real, '--force'), /Invalid branch/);
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+test('terminal copy: shared indentation is removed, relative indentation kept', () => {
+  const { stripGutter, pasteLines } = require('../src/renderer/seltext.js');
+  assert.strictEqual(stripGutter('  if x:\n      y()\n\n  z()'), 'if x:\n    y()\n\nz()');
+  assert.strictEqual(stripGutter('  one line'), 'one line');
+  // a selection that starts mid-line shares no indentation
+  assert.strictEqual(stripGutter('tail of line\n  next'), 'tail of line\n  next');
+  assert.strictEqual(stripGutter('  a\r\n  b'), 'a\r\nb');
+  assert.strictEqual(stripGutter(''), '');
+  assert.strictEqual(pasteLines('ls\n'), 1);
+  assert.strictEqual(pasteLines('a\r\nb\nc'), 3);
+});

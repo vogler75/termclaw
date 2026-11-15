@@ -126,6 +126,74 @@ const cfgBase = () => {
     await waitFor(async () => ((await m.output(ids.local)) || '').split('\n').some((l) => l.trim() === `pst-${RUN}-end`), { msg: 'single paste output' });
   });
 
+  // Types a closing part after a paste of an open quote: the echo line only appears for exactly one paste.
+  const pastedOnce = async (tag, paste) => {
+    await app.evaluate(({ clipboard }, t) => clipboard.writeText(t), `echo '${tag}-${RUN}`);
+    await page.click('.xterm-screen');
+    await paste();
+    await sleep(600);
+    await page.keyboard.type("-end'");
+    await page.keyboard.press('Enter');
+    await waitFor(async () => ((await m.output(ids.local)) || '').split('\n').some((l) => l.trim() === `${tag}-${RUN}-end`), { msg: tag + ' paste output' });
+  };
+
+  await step('P1 Ctrl+Shift+V and Shift+Insert paste exactly once', async () => {
+    await pastedOnce('psv', () => page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+V' : 'Control+Shift+V'));
+    if (process.platform !== 'darwin') await pastedOnce('pin', () => page.keyboard.press('Shift+Insert'));
+  });
+
+  await step('P1 right click in the terminal: Paste from the menu, Copy of a selection', async () => {
+    await pastedOnce('pmn', async () => {
+      await page.click('.xterm-screen', { button: 'right' });
+      await page.click('.menu div:text-is("Paste")');
+    });
+    // Select all + Copy puts the terminal text on the clipboard
+    await page.click('.xterm-screen', { button: 'right' });
+    await page.click('.menu div:text-is("Select all")');
+    await page.click('.xterm-screen', { button: 'right' });
+    await page.click('.menu div:text-is("Copy")');
+    await waitFor(async () => (await app.evaluate(({ clipboard }) => clipboard.readText())).includes(`pmn-${RUN}-end`), { msg: 'copied terminal text' });
+    await page.keyboard.press('Escape');
+  });
+
+  await step('P1 a paste of several lines into a line-by-line program asks first', async () => {
+    await app.evaluate(({ clipboard }, t) => clipboard.writeText(t), `echo ml1-${RUN}\necho ml2-${RUN}\n`);
+    await page.click('.xterm-screen');
+    const bracketed = await page.evaluate((id) => window.__termclaw.terms.get(id).term.modes.bracketedPasteMode, ids.local);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+    const dialog = page.locator('.modal:has-text("Paste several lines?")');
+    // A shell with bracketed paste takes the block as it is; no question then.
+    const asked = await dialog.waitFor({ timeout: 2500 }).then(() => true, () => false);
+    if (asked) {
+      const before = (await m.output(ids.local)) || '';
+      assert.ok(!before.includes(`ml2-${RUN}`), 'nothing pasted before the answer');
+      await dialog.locator('button.primary').click();
+    } else assert.strictEqual(bracketed, true, 'no question although the shell takes pastes line by line');
+    await page.keyboard.press('Enter');
+    await waitFor(async () => { const o = ((await m.output(ids.local)) || '').split('\n').map((l) => l.trim()); return o.includes(`ml1-${RUN}`) && o.includes(`ml2-${RUN}`); }, { msg: 'both lines ran' });
+  });
+
+  await step('P1 an image on the clipboard is pasted as the path of a saved file, the same image as the same file', async () => {
+    await page.click('.xterm-screen');
+    await page.evaluate(async () => {
+      const c = document.createElement('canvas');
+      c.width = 8; c.height = 8;
+      c.getContext('2d').fillRect(1, 1, 5, 5);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    });
+    const paths = async () => [...new Set((((await m.output(ids.local)) || '').replace(/\s+/g, '').match(/paste-[0-9a-f]{16}\.png/g)) || [])];
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+    const [name] = await waitFor(async () => { const p = await paths(); return p.length ? p : null; }, { msg: 'typed image path' });
+    const file = path.join(await app.evaluate(({ app }) => app.getPath('temp')), 'termclaw-paste', name);
+    assert.ok(fs.statSync(file).size > 0, 'image file saved');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V');
+    await sleep(800);
+    assert.deepStrictEqual(await paths(), [name], 'second paste of the same image uses the same file');
+    await page.keyboard.press('Control+C'); // discard the typed paths
+    try { fs.unlinkSync(file); } catch {}
+  });
+
   await step('Files: file browser on a local project — navigate, new folder, folders listed first', async () => {
     const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'termclaw-browse-'));
     fs.writeFileSync(path.join(dir, 'readme.txt'), 'hi');

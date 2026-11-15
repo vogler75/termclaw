@@ -670,6 +670,8 @@ export function renderSettings(ctx, main) {
   const scheme = h('select', null, SCHEMES.map((sc) => h('option', { value: sc.id, selected: (st.terminalScheme || 'default') === sc.id }, sc.name)));
   const contrast = h('input', { type: 'checkbox', checked: !!st.terminalContrast });
   const notif = h('input', { type: 'checkbox', checked: st.notifications });
+  const copySel = h('input', { type: 'checkbox', checked: !!st.copyOnSelect });
+  const pasteWarn = h('input', { type: 'checkbox', checked: st.pasteWarning !== false });
   const oc = h('input', { value: st.opencodePath || '', placeholder: 'detect automatically' });
   const ocInfo = h('span', { class: 'muted' });
   const page = h('div', { class: 'page page-narrow' },
@@ -681,11 +683,13 @@ export function renderSettings(ctx, main) {
         field('Overview font size', ofs, 'Empty = depends on the number of tiles'),
         field('Terminal colors', scheme, 'Projects and single sessions can use another scheme (project editor, session menu)'),
         field('Contrast', h('label', { class: 'row' }, contrast, 'Increase contrast: adjust text colors that are hard to read on their background (e.g. blue on green)')),
+        field('Copy', h('label', { class: 'row' }, copySel, 'Copy on select: text selected in a terminal goes to the clipboard right away')),
+        field('Paste', h('label', { class: 'row' }, pasteWarn, 'Ask before pasting several lines into a program that would run them line by line')),
         field('Notifications', h('label', { class: 'row' }, notif, 'Desktop notification when a session switches to “waiting”')),
         field('OpenCode program', h('div', { class: 'row' }, oc, h('button', { onclick: async () => { const p = await call('detectOpencode'); ocInfo.textContent = p ? 'found: ' + p : 'not found'; } }, 'Detect')), null),
         h('div', { class: 'hint' }, ocInfo),
         h('div', { class: 'full row' }, h('div', { class: 'spacer' }), h('button', { class: 'primary', onclick: async () => {
-          await call('updateSettings', { defaultThresholdSec: Number(thr.value) || 5, fontSize: Number(fs.value) || 13, overviewFontSize: Number(ofs.value) || null, terminalScheme: scheme.value, terminalContrast: contrast.checked, notifications: notif.checked, opencodePath: oc.value.trim() });
+          await call('updateSettings', { defaultThresholdSec: Number(thr.value) || 5, fontSize: Number(fs.value) || 13, overviewFontSize: Number(ofs.value) || null, terminalScheme: scheme.value, terminalContrast: contrast.checked, copyOnSelect: copySel.checked, pasteWarning: pasteWarn.checked, notifications: notif.checked, opencodePath: oc.value.trim() });
           for (const t of ctx.terms.values()) t.baseFontSize = Number(fs.value) || 13;
           await reloadConfig(ctx);
           toast('Saved');
@@ -707,7 +711,7 @@ export function renderSettings(ctx, main) {
         ['Ctrl/⌘ + Shift + G', 'Toggle tile view'],
         ['Ctrl/⌘ + Shift + O', 'Overview'],
         ['Ctrl/⌘ + Shift + W', 'Close session'],
-        ['Ctrl/⌘ + Shift + C / V', 'Copy / paste in the terminal'],
+        ['Ctrl/⌘ + Shift + C / V', 'Copy / paste in the terminal (also Ctrl + C with a selection, Ctrl + V, Ctrl + Insert / Shift + Insert, right click)'],
       ].map(([k, d]) => h('tr', null, h('td', null, h('span', { class: 'kbd' }, k)), h('td', null, d))))));
   main.appendChild(h('div', { class: 'content' }, page));
 }

@@ -142,10 +142,21 @@ function schemeDialog(s) {
   });
 }
 
+// Several lines pasted into a program that takes them one by one (a plain shell): each line would run.
+function confirmPaste(lines, text) {
+  if (S.config.settings.pasteWarning === false) return true;
+  const first = text.trim().split(/\r\n|\r|\n/)[0];
+  return confirmDialog('Paste several lines?',
+    h('div', null,
+      h('p', null, `The clipboard holds ${lines} lines. This program takes a paste line by line, so every line runs as if you had pressed Enter after it.`),
+      h('p', { class: 'mono muted' }, first.length > 100 ? first.slice(0, 100) + '…' : first, ' …')),
+    'Paste');
+}
+
 function termFor(id) {
   let t = terms.get(id);
   if (!t) {
-    t = new TermView(id, { fontSize: S.config.settings.fontSize || 13, zoom: loadZooms()[zoomKey(id)] || 0, scheme: schemeFor(id), contrast: !!S.config.settings.terminalContrast, onZoom: saveZoom, onKey: handleShortcut, onDropFiles: (sid, paths) => files.dropOnTerminal(ctx, sid, paths), onPasteImage: (sid) => files.pasteImage(ctx, sid), isMac: isMac() });
+    t = new TermView(id, { fontSize: S.config.settings.fontSize || 13, zoom: loadZooms()[zoomKey(id)] || 0, scheme: schemeFor(id), contrast: !!S.config.settings.terminalContrast, onZoom: saveZoom, onKey: handleShortcut, onDropFiles: (sid, paths) => files.dropOnTerminal(ctx, sid, paths), onPasteFiles: (sid, what) => files.pasteFiles(ctx, sid, what), copyOnSelect: () => !!S.config.settings.copyOnSelect, confirmPaste, isMac: isMac() });
     terms.set(id, t);
   }
   return t;

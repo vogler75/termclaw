@@ -6,21 +6,42 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import '@xterm/xterm/css/xterm.css';
 import { schemeById, READABLE_CONTRAST } from './schemes.js';
+import { contextMenu } from './ui.js';
+import { stripGutter, pasteLines } from './seltext.js';
+
+// The clipboard is written in the main process: navigator.clipboard refuses while the window has no
+// focus, and a program in a background window may still copy (OSC 52).
+const copyText = (text) => window.termclaw.call('copy', text);
 
 // Programs copy with OSC 52 (Copilot, Claude Code, tmux, vim, ... over SSH too). Reading the clipboard
 // that way is refused: a remote program must not see what the user copied elsewhere.
 const COPY_ONLY = {
   readText: () => '',
   // Any selection (c, p, s0…, or empty as tmux sends it) goes to the system clipboard; there is no other.
-  writeText: (selection, text) => (text ? navigator.clipboard.writeText(text) : undefined),
+  writeText: (selection, text) => (text ? copyText(text) : undefined),
 };
+
+// Files of a drop or paste: those with a local path, and image data without one (screenshot, copied picture).
+function splitFiles(list) {
+  const paths = [];
+  const images = [];
+  for (const f of [...(list || [])]) {
+    const p = window.termclaw.pathForFile(f);
+    if (p) paths.push(p);
+    else if (/^image\//.test(f.type)) images.push(f);
+  }
+  return { paths, images };
+}
 
 export const FONT_MIN = 6;
 export const FONT_MAX = 40;
 const clampFont = (n) => Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(n)));
 
 export class TermView {
-  constructor(id, { fontSize = 13, zoom = 0, scheme = 'default', contrast = false, onZoom, onKey, onDropFiles, onPasteImage, isMac }) {
+  // onPasteFiles(id, {paths, images}): copied files (local paths) or image data without a file.
+  // copyOnSelect(): setting, read when a selection changes. confirmPaste(lines): asked before a paste of
+  // several lines into a program that takes them line by line; resolves false to cancel.
+  constructor(id, { fontSize = 13, zoom = 0, scheme = 'default', contrast = false, onZoom, onKey, onDropFiles, onPasteFiles, copyOnSelect, confirmPaste, isMac }) {
     this.id = id;
     this.baseFontSize = fontSize;
     // Per-session font zoom in px on top of the size the current view asks for (single, tiles, overview).
@@ -44,8 +65,10 @@ export class TermView {
       this.el.classList.remove('drop-files');
       if (!isFiles(e)) return;
       e.preventDefault();
-      const paths = [...e.dataTransfer.files].map((f) => window.termclaw.pathForFile(f)).filter(Boolean);
-      if (paths.length && onDropFiles) onDropFiles(id, paths);
+      const { paths, images } = splitFiles(e.dataTransfer.files);
+      if (paths.length) { if (onDropFiles) onDropFiles(id, paths); }
+      // A picture dragged out of a browser or a chat has no file: handled like a pasted image.
+      else if (images.length && onPasteFiles) onPasteFiles(id, { paths: [], images });
     });
     this.term = new Terminal({
       fontSize: clampFont(fontSize + zoom),
@@ -68,26 +91,20 @@ export class TermView {
     this.term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
       const mod = isMac ? e.metaKey : e.ctrlKey;
-      // Copy / paste
-      if ((mod && e.shiftKey && e.code === 'KeyC') || (isMac && e.metaKey && e.code === 'KeyC')) {
-        const sel = this.term.getSelection();
-        if (sel) navigator.clipboard.writeText(sel);
-        return false;
-      }
-      if (!isMac && e.ctrlKey && !e.shiftKey && e.code === 'KeyC' && this.term.hasSelection()) {
-        navigator.clipboard.writeText(this.term.getSelection());
-        this.term.clearSelection();
-        return false;
-      }
-      if ((mod && e.shiftKey && e.code === 'KeyV') || (isMac && e.metaKey && e.code === 'KeyV') || (!isMac && e.ctrlKey && e.code === 'KeyV')) {
-        // The browser default and the Edit menu accelerator would fire a native paste event as well,
-        // which xterm handles too: prevent it and swallow a native paste right after this one.
+      // Copy: Ctrl/⌘+Shift+C, ⌘+C, Ctrl+Insert; Ctrl+C only with a selection (else it interrupts).
+      if ((mod && e.shiftKey && e.code === 'KeyC') || (isMac && e.metaKey && e.code === 'KeyC') || (!isMac && e.ctrlKey && !e.shiftKey && e.code === 'Insert')) {
         e.preventDefault();
-        this.shortcutPasteAt = Date.now();
-        // No text: maybe an image (screenshot), pasted as a file path.
-        navigator.clipboard.readText().then((t) => (t ? this.term.paste(t) : onPasteImage && onPasteImage(id)));
+        this.copySelection();
         return false;
       }
+      if (!isMac && e.ctrlKey && !e.shiftKey && !e.altKey && e.code === 'KeyC' && this.term.hasSelection()) {
+        e.preventDefault();
+        this.copySelection(true);
+        return false;
+      }
+      // Paste: Ctrl/⌘+V, Ctrl/⌘+Shift+V, Shift+Insert. The key is left to the browser, whose paste
+      // event (handled below) carries text, copied files and images alike.
+      if ((mod && !e.altKey && e.code === 'KeyV') || (!isMac && e.shiftKey && !e.ctrlKey && !e.altKey && e.code === 'Insert')) return false;
       // Shift+PageUp/Down on the alternate screen (tmux, full-screen TUIs) has no scrollback in xterm:
       // when the program tracks the mouse, send wheel events instead, so tmux scrolls its history.
       if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.code === 'PageUp' || e.code === 'PageDown')
@@ -101,12 +118,72 @@ export class TermView {
       return true;
     });
 
+    // Every paste (shortcut, Edit menu, context menu) arrives here, before xterm's own handler.
+    // Copied files win over the text that only names them; text wins over a picture of it (Excel, Word).
+    this.confirmPaste = confirmPaste;
     this.el.addEventListener('paste', (e) => {
-      if (Date.now() - (this.shortcutPasteAt || 0) < 500) { e.preventDefault(); e.stopImmediatePropagation(); }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const cd = e.clipboardData;
+      if (!cd) return;
+      const { paths, images } = splitFiles(cd.files);
+      const text = cd.getData('text/plain');
+      if (paths.length) { if (onPasteFiles) onPasteFiles(id, { paths, images: [] }); }
+      else if (text) this.pasteText(text);
+      else if (images.length && onPasteFiles) onPasteFiles(id, { paths: [], images });
     }, true);
+
+    // Right click: menu. A program that tracks the mouse (tmux, full-screen TUIs) does not get the
+    // click as well; Ctrl+right-click still goes to the program.
+    const tracksMouse = () => this.term.modes.mouseTrackingMode !== 'none';
+    this.el.addEventListener('mousedown', (e) => {
+      if (e.button !== 2 || e.ctrlKey || !tracksMouse()) return;
+      e.stopPropagation();
+      this.focus();
+    }, true);
+    this.el.addEventListener('contextmenu', (e) => {
+      if (e.ctrlKey && tracksMouse()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const back = (fn) => () => { fn(); this.focus(); };
+      contextMenu(e.clientX, e.clientY, [
+        this.term.hasSelection() ? { label: 'Copy', action: back(() => this.copySelection()) } : null,
+        // The main process pastes into the focused terminal, which fires the paste event above.
+        { label: 'Paste', action: () => { this.focus(); window.termclaw.call('paste'); } },
+        '-',
+        { label: 'Select all', action: back(() => this.term.selectAll()) },
+        { label: 'Clear scrollback', action: back(() => this.term.clear()) },
+      ].filter(Boolean));
+    }, true);
+
+    // Copy on select (setting): once the selection has settled, not on every cell of a drag.
+    this.term.onSelectionChange(() => {
+      clearTimeout(this._selTimer);
+      if (!copyOnSelect || !copyOnSelect()) return;
+      this._selTimer = setTimeout(() => this.copySelection(), 250);
+    });
 
     this.ro = new ResizeObserver(() => this.scheduleFit());
     this.ro.observe(this.el);
+  }
+
+  // Selection to the clipboard; false without a selection.
+  copySelection(clear = false) {
+    const sel = stripGutter(this.term.getSelection());
+    if (!sel) return false;
+    copyText(sel);
+    if (clear) this.term.clearSelection();
+    return true;
+  }
+
+  // Text into the program. xterm frames it as one block when the program asked for that (bracketed paste:
+  // agents, modern shells); otherwise every line break acts as Enter, so several lines are confirmed first.
+  async pasteText(text) {
+    if (!text) return;
+    const lines = pasteLines(text);
+    if (lines > 1 && !this.term.modes.bracketedPasteMode && this.confirmPaste && !(await this.confirmPaste(lines, text))) { this.focus(); return; }
+    this.term.paste(text);
+    this.focus();
   }
 
   // Move into a container; opens the terminal on first attach.
@@ -192,6 +269,7 @@ export class TermView {
   focus() { this.term.focus(); }
 
   dispose() {
+    clearTimeout(this._selTimer);
     this.ro.disconnect();
     this.term.dispose();
     this.detach();

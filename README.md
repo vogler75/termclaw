@@ -60,7 +60,7 @@ The project editor sets the connection (local, SSH, WSL, or a developer host), s
 | Ctrl/⌘ + Shift + O | overview |
 | Ctrl/⌘ + Shift + W | close session |
 | Ctrl/⌘ + Plus / Minus / 0 | larger / smaller / reset font of the terminal (also Ctrl/⌘ + mouse wheel and the session context menu; kept per session) |
-| Ctrl/⌘ + Shift + C / V | copy / paste (Ctrl + C copies a selection, Ctrl + V pastes on Windows) |
+| Ctrl/⌘ + Shift + C / V | copy / paste (on Windows and Linux also Ctrl + C with a selection, Ctrl + V, Ctrl + Insert / Shift + Insert; right click opens a menu with Copy, Paste, Select all) |
 
 ## Connections
 
@@ -103,7 +103,9 @@ ACP agents are implemented in `src/main/acp.js`; another built-in agent is one e
 ![File browser](docs/screenshots/file-browser.png)
 
 - **Drop files onto a terminal** (from the Explorer / Finder) to copy them to the project machine, into the directory the shell is in right now. Folders work too. If a name already exists you are asked before it is replaced. On a local terminal the file paths are typed in instead.
-- **Paste images** (Ctrl/⌘ + V with a screenshot or copied picture on the clipboard): the image is saved as a PNG and its path is typed into the terminal, so agents such as Claude Code or Copilot pick it up as an image. On a local terminal the path points to the app's temp folder (`termclaw-paste`, cleaned after a week); on SSH and WSL the image is uploaded to `/tmp` on the project machine first.
+- **Paste images** (Ctrl/⌘ + V, the right-click menu or Edit → Paste with a screenshot or copied picture on the clipboard): the image is saved as a file and its path is typed into the terminal, so agents such as Claude Code or Copilot pick it up as an image. On a local terminal the path points to the app's temp folder (`termclaw-paste`, cleaned after a week); on SSH and WSL the image is uploaded to `/tmp` on the project machine first. The file is named after its content, so pasting the same picture again does not upload it again. A picture dragged out of a browser works the same way.
+- **Paste copied files** (copy files in the Explorer / Finder, paste into a terminal): on a local terminal their paths are typed in. On SSH and WSL, images go to `/tmp` and their paths are typed in; other files are copied into the shell's directory, like a drop.
+- **Paste text**: a program that asked for it (agents, modern shells) gets the text as one block. A program that takes a paste line by line would run every line, so TermClaw asks before it pastes several lines there (*Settings → Paste*). **Copy** removes the indentation that all selected lines share (agents indent their output); *Settings → Copy* turns on copy on select.
 - **Files** in the project header (or *Browse files…* in the context menu) opens a file browser in the shell's current directory or the project folder. Double-click opens folders and downloads files; select several entries (Ctrl / Shift) and click **Download** to copy them into a local folder. **Upload…** or dropping files onto the list copies them into the folder shown; **New folder…** creates one.
 
 SSH and WSL transfers run over `ssh` / `wsl.exe` with the terminal's connection settings: files are streamed with `cat`, folders with `tar`; a file is written under a temporary name and renamed when complete. The shell's directory comes from the shell itself (OSC 7), from tmux (`pane_current_path`), or on Linux from the shell process marked with `TERMCLAW_SID`; otherwise the project folder is used.

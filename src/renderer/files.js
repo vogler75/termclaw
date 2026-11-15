@@ -57,26 +57,39 @@ export async function dropOnTerminal(ctx, sessionId, paths) {
   await upload(t.projectId, paths, t.dir, `${t.label}:${t.dir}`);
 }
 
-// Image from the clipboard pasted into a terminal: saved as a PNG and its path typed in, so agents
-// (Claude Code, Copilot, …) pick it up as an image. Remote shells get the file in /tmp on their machine.
-// Returns false when the clipboard holds no image.
-export async function pasteImage(ctx, sessionId) {
-  const file = await call('clipboardImage');
-  if (!file) return false;
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|bmp)$/i;
+// Named after its content by the main process (saveImage): the same picture is uploaded only once.
+const SAVED_IMAGE = /^paste-[0-9a-f]{16}\.\w+$/;
+
+// Paste into a terminal of copied files (paths) or image data without a file (images: screenshot, copied
+// picture), which is saved as a file first. The paths are typed in, so agents (Claude Code, Copilot, …)
+// pick images up. A remote shell gets images in /tmp on its machine and other files in its directory, like a drop.
+export async function pasteFiles(ctx, sessionId, { paths = [], images = [] }) {
   let t;
-  try { t = await call('filesDropTarget', sessionId); } catch (e) { toast(e.message, { error: true }); return true; }
-  if (!t.remote) {
-    call('write', sessionId, quoteLocal(file, ctx.S.platform === 'win32') + ' ');
-    return true;
-  }
-  const j = job(`Uploading the pasted image to ${t.label}`);
+  try { t = await call('filesDropTarget', sessionId); } catch (e) { toast(e.message, { error: true }); return; }
+  const local = [...paths];
   try {
-    await call('filesUpload', t.projectId, [file], '/tmp', j.jobId);
-    call('write', sessionId, quoteLocal('/tmp/' + base(file), false) + ' ');
-  } catch (e) {
-    toast('Image paste failed: ' + e.message, { error: true, ms: 10000 });
-  } finally { j.finish(); }
-  return true;
+    for (const f of images) local.push(await call('saveImage', new Uint8Array(await f.arrayBuffer()), f.type));
+  } catch (e) { toast('Image paste failed: ' + e.message, { error: true, ms: 10000 }); return; }
+  if (!local.length) return;
+  if (!t.remote) {
+    call('write', sessionId, local.map((p) => quoteLocal(p, ctx.S.platform === 'win32')).join(' ') + ' ');
+    return;
+  }
+  const pics = local.filter((p) => IMAGE_FILE.test(p));
+  const others = local.filter((p) => !IMAGE_FILE.test(p));
+  if (pics.length) {
+    const j = job(`Uploading ${pics.length === 1 ? 'the pasted image' : pics.length + ' pasted images'} to ${t.label}`);
+    try {
+      const there = new Set((await call('filesExists', t.projectId, '/tmp', pics.map(base))).filter((n) => SAVED_IMAGE.test(n)));
+      const todo = pics.filter((p) => !there.has(base(p)));
+      if (todo.length) await call('filesUpload', t.projectId, todo, '/tmp', j.jobId);
+      call('write', sessionId, pics.map((p) => quoteLocal('/tmp/' + base(p), false)).join(' ') + ' ');
+    } catch (e) {
+      toast('Image paste failed: ' + e.message, { error: true, ms: 10000 });
+    } finally { j.finish(); }
+  }
+  if (others.length) await upload(t.projectId, others, t.dir, `${t.label}:${t.dir}`);
 }
 
 // File browser for a project (starts in dir, else the project directory).
