@@ -216,7 +216,7 @@ export async function editProject(ctx, p) {
     field('Type', dsKind),
     agentCmdLabel, h('div', null, agentCmd, cmdList), agentCmdHint,
     h('h3', { class: 'full' }, 'Local shell (Session ▾ menu)'),
-    field('Shell', lsShell, 'A shell on this computer next to the project’s sessions, e.g. PowerShell or WSL for an SSH project. All shells found here are also in the menu, started in the home directory.'),
+    field('Shell', lsShell, 'A shell on this computer next to the project’s sessions, e.g. PowerShell or WSL for an SSH project. The shells chosen in Settings are also in the menu, started in the home directory.'),
     field('Directory', lsDir, 'Empty = home directory'),
     h('h3', { class: 'full' }, 'Terminals (“Start all”)'),
     h('div', { class: 'full' }, terms.el),
@@ -670,8 +670,15 @@ export function renderSettings(ctx, main) {
   const scheme = h('select', null, SCHEMES.map((sc) => h('option', { value: sc.id, selected: (st.terminalScheme || 'default') === sc.id }, sc.name)));
   const contrast = h('input', { type: 'checkbox', checked: !!st.terminalContrast });
   const notif = h('input', { type: 'checkbox', checked: st.notifications });
+  const usageOn = h('input', { type: 'checkbox', checked: st.usage !== false });
   const copySel = h('input', { type: 'checkbox', checked: !!st.copyOnSelect });
   const pasteWarn = h('input', { type: 'checkbox', checked: st.pasteWarning !== false });
+  // Local shells in the Session ▾ menu: by default the usual ones (the login shell on macOS / Linux).
+  const shellList = S.localShells || [];
+  const shellOn = (x) => (Array.isArray(st.menuShells) ? st.menuShells.includes(x.id) : x.menu);
+  const shellChecks = h('div', { class: 'checklist' }, shellList.length
+    ? shellList.map((x) => h('label', { title: x.id }, h('input', { type: 'checkbox', 'data-shell': x.id, checked: shellOn(x) }), x.label))
+    : h('div', { class: 'muted' }, 'No shells found'));
   const oc = h('input', { value: st.opencodePath || '', placeholder: 'detect automatically' });
   const ocInfo = h('span', { class: 'muted' });
   const page = h('div', { class: 'page page-narrow' },
@@ -686,10 +693,12 @@ export function renderSettings(ctx, main) {
         field('Copy', h('label', { class: 'row' }, copySel, 'Copy on select: text selected in a terminal goes to the clipboard right away')),
         field('Paste', h('label', { class: 'row' }, pasteWarn, 'Ask before pasting several lines into a program that would run them line by line')),
         field('Notifications', h('label', { class: 'row' }, notif, 'Desktop notification when a session switches to “waiting”')),
+        field('Usage limits', h('label', { class: 'row' }, usageOn, 'Show how much of the Claude Code and Codex limits is used on the project’s machine (project bar)')),
+        field('Shells in the menu', shellChecks, 'Local shells offered under ▾ next to the tabs. A project can still use any shell found here as its own local shell (project editor).'),
         field('OpenCode program', h('div', { class: 'row' }, oc, h('button', { onclick: async () => { const p = await call('detectOpencode'); ocInfo.textContent = p ? 'found: ' + p : 'not found'; } }, 'Detect')), null),
         h('div', { class: 'hint' }, ocInfo),
         h('div', { class: 'full row' }, h('div', { class: 'spacer' }), h('button', { class: 'primary', onclick: async () => {
-          await call('updateSettings', { defaultThresholdSec: Number(thr.value) || 5, fontSize: Number(fs.value) || 13, overviewFontSize: Number(ofs.value) || null, terminalScheme: scheme.value, terminalContrast: contrast.checked, copyOnSelect: copySel.checked, pasteWarning: pasteWarn.checked, notifications: notif.checked, opencodePath: oc.value.trim() });
+          await call('updateSettings', { defaultThresholdSec: Number(thr.value) || 5, fontSize: Number(fs.value) || 13, overviewFontSize: Number(ofs.value) || null, terminalScheme: scheme.value, terminalContrast: contrast.checked, copyOnSelect: copySel.checked, pasteWarning: pasteWarn.checked, notifications: notif.checked, usage: usageOn.checked, opencodePath: oc.value.trim(), ...(shellList.length ? { menuShells: [...shellChecks.querySelectorAll('input[data-shell]')].filter((c) => c.checked).map((c) => c.dataset.shell) } : {}) });
           for (const t of ctx.terms.values()) t.baseFontSize = Number(fs.value) || 13;
           await reloadConfig(ctx);
           toast('Saved');

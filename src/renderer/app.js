@@ -9,6 +9,8 @@ import * as files from './files.js';
 import * as docker from './docker.js';
 import * as monitor from './monitor.js';
 import * as git from './git.js';
+import * as schedules from './schedules.js';
+import * as usage from './usage.js';
 
 const call = (m, ...a) => window.termclaw.call(m, ...a);
 
@@ -20,10 +22,11 @@ export const S = {
   mcp: {},
   tokens: [],
   orchestrators: [],
+  schedules: [],
   templates: [],
   audit: [],
   platform: 'win32',
-  view: 'project', // project | overview | hosts | orch | mcp | audit | settings
+  view: 'project', // project | overview | hosts | orch | sched | mcp | audit | settings
   projectId: null,
   orchId: null,
   active: {}, // projectId -> sessionId
@@ -233,6 +236,7 @@ const ICONS = {
   hosts: svgIcon('<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>'),
   orch: svgIcon('<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>'),
   mcp: svgIcon('<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>'),
+  sched: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   library: svgIcon('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>'),
   audit: svgIcon('<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>'),
   settings: svgIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
@@ -250,6 +254,7 @@ function renderSidebar() {
   sb.appendChild(h('div', { class: 'sb-nav' },
     navBtn('hosts', 'hosts', 'Hosts', S.config.hosts.length),
     navBtn('orch', 'orch', 'Orchestrators', orchRunning || undefined),
+    navBtn('sched', 'sched', 'Scheduled', S.schedules.filter((x) => x.enabled).length || undefined),
     navBtn('mcp', 'mcp', 'MCP', S.mcp.running ? '●' : '○', S.mcp.running ? 'running' : ''),
     navBtn('library', 'library', 'Library', (S.config.mcpLibrary || []).length || undefined),
     navBtn('audit', 'audit', 'Audit log')));
@@ -410,8 +415,14 @@ async function browseFrom(s) {
   files.openBrowser(ctx, s.projectId, dir);
 }
 
+// Local shells offered in the Session menu: the user's choice (Settings), else the usual ones of this computer.
+function menuShells() {
+  const chosen = S.config.settings.menuShells;
+  return (S.localShells || []).filter((x) => (Array.isArray(chosen) ? chosen.includes(x.id) : x.menu));
+}
+
 // Structured agent sessions: OpenCode server API or any agent via ACP.
-// ▾ next to +: the default session, the project's local shell, every shell found on this computer, and the agents.
+// ▾ next to +: the default session, the project's local shell, the local shells chosen for the menu, and the agents.
 async function newSessionMenu(e, p) {
   const r = e.currentTarget.getBoundingClientRect();
   if (!S.localShells) S.localShells = await call('localShells').catch(() => []);
@@ -421,7 +432,7 @@ async function newSessionMenu(e, p) {
     { label: `Default session (${p.type === 'local' ? 'local' : p.type.toUpperCase()}${p.directory ? ' · ' + p.directory : ''})`, action: () => openSession(p.id) },
     ...(ls.shell ? [{ label: `Local: ${label(ls.shell)}${ls.directory ? ' · ' + ls.directory : ''}`, action: () => openSession(p.id, { shell: { id: ls.shell, dir: ls.directory || '' } }) }] : []),
     '-',
-    ...S.localShells.map((x) => ({ label: x.label, action: () => openSession(p.id, { shell: { id: x.id } }) })),
+    ...menuShells().map((x) => ({ label: x.label, action: () => openSession(p.id, { shell: { id: x.id } }) })),
     '-',
     { label: 'OpenCode (server API)', action: () => openSession(p.id, { kind: 'agent', name: 'agent', command: '' }) },
     { label: 'OpenCode via ACP', action: () => openSession(p.id, { kind: 'acp', acpAgent: 'opencode', name: 'opencode', command: '' }) },
@@ -475,6 +486,7 @@ function renderMainView() {
   if (S.view === 'overview') return renderOverview(main);
   if (S.view === 'hosts') return pages.renderHosts(ctx, main);
   if (S.view === 'orch') return pages.renderOrchestrators(ctx, main);
+  if (S.view === 'sched') return schedules.renderSchedules(ctx, main);
   if (S.view === 'mcp') return pages.renderMcp(ctx, main);
   if (S.view === 'audit') return pages.renderAudit(ctx, main);
   if (S.view === 'settings') return pages.renderSettings(ctx, main);
@@ -528,6 +540,7 @@ function renderProject(main) {
     h('button', { class: 'icon', title: 'New session or agent', onclick: (e) => newSessionMenu(e, p) }, '▾'),
     h('div', { class: 'spacer' }),
     forwardInfo(p),
+    usage.chip(ctx, p),
     h('button', { class: m === 'tabs' ? 'active' : '', onclick: () => setMode(p, 'tabs') }, 'Tabs'),
     h('button', { class: m === 'tiles' ? 'active' : '', onclick: () => setMode(p, 'tiles'), title: 'Tile view (Ctrl+Shift+G)' }, 'Tiles'),
     h('button', { title: 'Browse files on the project machine, upload and download (or drop files onto a terminal)', onclick: () => { const sid = activeSessionId(p.id); const s = sid && S.sessions.get(sid); s ? browseFrom(s) : files.openBrowser(ctx, p.id); } }, 'Files'),
@@ -821,12 +834,14 @@ on('config:changed', (cfg) => {
   const structural = JSON.stringify(cfg.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(cfg.hosts) !==
     JSON.stringify(S.config.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(S.config.hosts);
   S.config = cfg;
-  if (structural && !['settings', 'orch', 'mcp'].includes(S.view)) renderSoon();
+  if (structural && !['settings', 'orch', 'sched', 'mcp'].includes(S.view)) renderSoon();
 });
 on('orch:list', (list) => { S.orchestrators = list; pages.onOrchestratorsChanged(ctx); renderSidebar(); });
 on('orch:messages', ({ id, messages }) => { S.orchMessages.set(id, messages); S.orchLive.delete(id); pages.onOrchMessages(ctx, id); });
 on('orch:live', ({ id, text }) => { S.orchLive.set(id, text); pages.onOrchMessages(ctx, id); });
 on('focus-session', ({ id }) => selectSession(id));
+on('sched:list', (list) => { S.schedules = list; schedules.onSchedulesChanged(ctx); renderSidebar(); });
+on('show-view', ({ view }) => showView(view));
 
 // A file dropped anywhere else must not make the window navigate to it.
 for (const ev of ['dragover', 'drop']) document.addEventListener(ev, (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
@@ -841,12 +856,15 @@ export const ctx = { S, call, render, renderSoon, showView, openSession, selectS
   call('localShells').then((l) => { S.localShells = l; }).catch(() => {});
   setTimeout(pollGitSummaries, 2000);
   setInterval(pollGitSummaries, 60000);
+  // Usage limits of the project in view, read again every two minutes while the window is visible.
+  setInterval(() => { if (S.view === 'project' && !document.hidden) usage.refresh(ctx, S.projectId); }, 30000);
   S.hosts = st.hosts;
   S.forwards = st.forwards;
   S.mcp = st.mcp;
   S.tokens = st.tokens;
   S.orchestrators = st.orchestrators;
   S.templates = st.templates;
+  S.schedules = st.schedules || [];
   S.version = st.version;
   document.title = `TermClaw ${st.version}`;
   S.dataDir = st.dataDir;

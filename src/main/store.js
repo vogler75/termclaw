@@ -10,6 +10,8 @@ const uid = () => crypto.randomUUID();
 const DEFAULT_SETTINGS = {
   defaultThresholdSec: 5,
   notifications: true,
+  usage: true, // usage limits of Claude Code and Codex in the project bar
+  menuShells: null, // ids of the local shells in the Session menu; null = the usual ones (connect.js detectLocalShells)
   fontSize: 13,
   terminalScheme: 'default', // color scheme id, see src/renderer/schemes.js
   terminalContrast: false, // raise the contrast of hard to read color combinations
@@ -117,6 +119,8 @@ function normalize(data) {
     oauthClients: d.oauthClients || [],
     oauthGrants: d.oauthGrants || [],
     orchestrators: d.orchestrators || [],
+    // Scheduled prompts: [{id, name, enabled, cron, prompt, target, busy, busyWaitMin, startIfStopped, precheck, runs}].
+    schedules: d.schedules || [],
     // MCP servers that can be deployed to coding agents; env/headers are encrypted in `secrets`.
     mcpLibrary: d.mcpLibrary || [],
     // APM packages (references like owner/repo[/path][#ref]) that projects can install.
@@ -277,6 +281,7 @@ class Store extends EventEmitter {
       byId(this.data.projects, incoming.projects);
       byId(this.data.hosts, incoming.hosts);
       byId(this.data.orchestrators, incoming.orchestrators);
+      byId(this.data.schedules, incoming.schedules);
     } else {
       incoming.tokens = this.data.tokens;
       incoming.oauthClients = this.data.oauthClients;

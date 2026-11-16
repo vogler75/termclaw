@@ -485,3 +485,15 @@ td.dk-created { white-space: nowrap; }
 .scheme-sw { display: flex; align-items: center; gap: 3px; padding: 4px 6px; border-radius: 4px; font-family: "Cascadia Mono", Menlo, Consolas, monospace; font-size: 12px; border: 1px solid rgba(128,128,128,.3); }
 .scheme-sw span { margin-right: 4px; }
 .scheme-sw i { width: 9px; height: 12px; border-radius: 2px; display: inline-block; }
+
+/* usage limits */
+.usage-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 8px; color: var(--fg2); }
+.usage-chip.warn { color: var(--amber); border-color: var(--amber); }
+.usage-chip.bad { color: var(--red); border-color: var(--red); }
+.usage-dialog { display: flex; flex-direction: column; gap: 10px; }
+.usage-provider { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.usage-window { display: grid; grid-template-columns: 48px 1fr 56px 170px; gap: 10px; align-items: center; font-size: 12px; }
+.usage-window .usage-bar { margin-top: 0; }
+.usage-window .usage-pct { text-align: right; font-variant-numeric: tabular-nums; }
+/* scheduled prompts */
+.sched-prompt { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }

@@ -186,6 +186,12 @@ test('local shell: any project can open one; no tmux, no default session, home d
     assert.strictEqual(buildLocalShell({ id: 'powershell', dir: 'C:\work' }).cwd, 'C:\work');
     assert.throws(() => buildLocalShell({ id: 'nope' }), /Unknown local shell/);
   }
+  if (process.platform !== 'win32') {
+    // The shell that was asked for is the one that starts, and SHELL names it (not the app's login shell).
+    const ksh = buildLocalShell({ id: '/bin/ksh' });
+    assert.strictEqual(ksh.file, '/bin/ksh');
+    assert.deepStrictEqual(ksh.env, { SHELL: '/bin/ksh' });
+  }
   assert.strictEqual(localShellName('wsl:Ubuntu-22.04'), 'wsl-ubuntu-22-04');
   assert.strictEqual(localShellLabel('pwsh'), 'PowerShell 7');
   // The session manager does not apply the project's default session to a local shell and persists the choice.

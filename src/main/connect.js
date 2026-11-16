@@ -202,7 +202,10 @@ async function detectLocalShells() {
       ids.push(sh);
     }
   }
-  const list = ids.map((id) => ({ id, label: localShellLabel(id) }));
+  // menu: shown in the Session menu unless the user picked their own set (Settings). /etc/shells lists
+  // every shell of the system (sh, csh, dash, ksh, tcsh …), so on macOS and Linux only the login shell is.
+  const login = ids.find((id) => id === process.env.SHELL) || ids[0];
+  const list = ids.map((id) => ({ id, label: localShellLabel(id), menu: IS_WIN || id === login }));
   shellCache = { at: Date.now(), list };
   return list;
 }
@@ -230,7 +233,9 @@ function buildLocalShell(shell, command = '') {
     throw new Error('Unknown local shell: ' + id);
   }
   const file = id && id.startsWith('/') ? id : process.env.SHELL || '/bin/sh';
-  return { ...base, cwd: dir ? dir.replace(/^~(?=$|\/)/, os.homedir()) : os.homedir(), file, args: ['-l'] };
+  // SHELL names the shell that runs: the app's own value (the login shell) would make programs started
+  // in a ksh or bash session (tmux, editors, agents, "echo $SHELL") go back to the login shell.
+  return { ...base, cwd: dir ? dir.replace(/^~(?=$|\/)/, os.homedir()) : os.homedir(), file, args: ['-l'], env: { SHELL: file } };
 }
 
 function buildSpawn(project, host, session) {

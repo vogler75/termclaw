@@ -17,6 +17,8 @@ Desktop app for Windows and macOS that keeps many AI coding agents running in pa
 - **MCP server** — tools to list, read, prompt and wait for sessions, open sessions, run commands and create projects; app tokens for local clients, OAuth sign-in (built-in with approval in the app, or authentik / Keycloak / Entra ID) for claude.ai.
 - **Coding agents** — install Claude Code, Codex, OpenCode, Antigravity, Copilot, pi, Cursor and Qwen Code, and deploy MCP servers, skills (also from Git repositories) and APM packages to them, per project, on the project's machine.
 - **Orchestrators** — OpenCode-based coordinators that react when watched sessions finish (e.g. developer + reviewer loops), with round limits, pause and stop.
+- **Scheduled prompts** — send a prompt to a session or an orchestrator at set times (every night, on weekdays, any cron expression), with a check command that can skip a run and a history of the runs.
+- **Usage limits** — how much of the 5-hour and weekly limits of Claude Code and Codex is used on the project's machine and when they reset, in the project bar.
 - **Developer hosts** — a directory of your Linux machines with reachability and session counts; projects reference a host.
 - Git tab per project in the style of GitHub Desktop: repositories under the project folders, changes with diff, commit, push and pull, branches, history.
 - Saved commands per project, drag & drop ordering of projects and sessions, keyboard shortcuts, audit log of every MCP and orchestrator action, JSON export / import.
@@ -38,7 +40,7 @@ Requirements on the machines you connect to: `ssh` with key authentication (your
 - **Right:** the project's sessions as **tabs** or **tiles** (2 = side by side, 3 = three columns or one large + two small, 4 = 2×2, more = grid). Clicking a tile header returns to the single view.
 - **Overview:** all running sessions of all projects, grouped per project. Tiles shrink via the font size, so text stays sharp. Click a tile to open the session.
 - **Status:** *working* (output within the last *n* seconds) and *waiting* (no output for longer than the threshold — default 5 s, per project — or a bell character). Agent sessions report their status exactly. Switching to *waiting* sends a desktop notification; clicking it opens the session.
-- **Local shells:** the **▾** next to the **+** after the tabs opens a shell on this computer in any project, also next to SSH sessions: the project's own local shell (set under *Local shell* in the project editor: shell and directory) and every shell found here — Windows PowerShell, PowerShell 7, Command Prompt, Git Bash and each WSL distribution on Windows; the shells from /etc/shells on macOS and Linux. These start in the home directory, without tmux or the project's default command, and are marked *local*.
+- **Local shells:** the **▾** next to the **+** after the tabs opens a shell on this computer in any project, also next to SSH sessions: the project's own local shell (set under *Local shell* in the project editor: shell and directory) and the shells of this computer — Windows PowerShell, PowerShell 7, Command Prompt, Git Bash and each WSL distribution on Windows; your login shell on macOS and Linux. *Settings → Shells in the menu* chooses which of the shells found (on macOS and Linux everything in /etc/shells) are offered. These start in the home directory, without tmux or the project's default command, and are marked *local*.
 - **Color schemes:** TermClaw (default), One Dark, Dracula, Tokyo Night, Nord, Gruvbox Dark, Solarized Dark / Light, GitHub Light and High contrast. The default for all terminals is set in *Settings*, a project can use its own (project editor, e.g. to tell production machines apart), and a single session can override both (session context menu → *Color scheme…*, previewed while you pick). *Settings → Increase contrast* adjusts text colors that are hard to read on their background, such as `ls`' blue on green.
 - **Saved commands** per project appear as buttons above the terminal and run in the active session. **Start all terminals** in the **⋯** menu starts all terminals configured for the project.
 - Sessions stay connected when you switch projects. Open sessions, view mode and tile layout are restored on restart; with tmux the app re-attaches to the sessions that kept running.
@@ -224,6 +226,27 @@ Codex and Copilot read MCP servers only from the home directory; use the user sc
 
 Under **Orchestrators** you create coordinators, each with a name, system prompt (templates *Developer + reviewer*, *Watch*), model, maximum rounds and the watched sessions. On start the app launches its own `opencode serve`, registers the app's MCP server with a token limited to those sessions, and creates an OpenCode session with the system prompt. When a watched session finishes, the event and its latest output go to the orchestrator as a message (queued if it is busy). Brakes: maximum rounds, pause, interrupt, stop. A session can only belong to one orchestrator.
 
+## Scheduled prompts
+
+Under **Scheduled** you set up prompts that are sent on their own: a name, where it goes (a session of a project or an orchestrator), the prompt and the times — every hour, every day, Monday to Friday, chosen weekdays, or a cron expression (`minute hour day month weekday`, local time). Examples: a nightly "update the dependencies and run the tests" to an agent session, a weekly "triage the open issues" to an orchestrator.
+
+- **If it is busy:** wait until the target is idle (up to a number of minutes), skip the run, or send anyway.
+- **Not running:** fail, or start it first — a session opens with the terminal of that name from the project's *Start all terminals* list (else the default session), an orchestrator is started. The prompt is sent once the session waits for input.
+- **Only if:** a command on the project's machine that runs before each time; the prompt is only sent when it ends with exit code 0 (e.g. `test -n "$(git -C ~/app status --porcelain)"`).
+- A terminal gets the prompt typed in with Enter (several lines as one paste when the program supports it), agent sessions and orchestrators get it as a message. For an orchestrator it counts as a new task, so its round counter starts again.
+- **Run now** sends the prompt right away; **History** shows the last 20 runs (sent, skipped, failed) with the reason. Failed runs send a desktop notification, and every run is in the audit log.
+
+Schedules run while the app is open; times that pass while it is closed are skipped. A renamed session keeps its schedules.
+
+## Usage limits
+
+The project bar shows the fullest limit of the coding agents on the project's machine (amber from 80 %, red from 95 %); a click opens the 5-hour and weekly windows of each agent with the time until they reset. The app asks no provider and uses no login of yours — it reads what the agents keep on the machine, over the project's connection, every two minutes while the project is in view:
+
+- **Codex** writes its limits into its session files (`~/.codex/sessions`); the newest reading of the last two weeks is shown. Nothing to set up.
+- **Claude Code** hands its limits to its status line command (subscription logins, Claude Code 2.1.80 or newer). **Set up for Claude Code** in the dialog installs a small script on the machine (`~/.termclaw/usage/claude-statusline.sh`) and enters it as `statusLine` in `~/.claude/settings.json`; it stores the limits and then runs the status line you had before, so that one keeps working. **Remove the script** puts your former status line back.
+
+A reading is as old as the agent's last answer there; windows that have reset since are shown as reset. Linux, macOS and WSL machines are read (on a local Windows project only Codex). *Settings → Usage limits* turns the display off.
+
 ## Developer hosts
 
 Under **Hosts** you register your development machines once (name, hostname, port, user, workspace folder, tags). Projects reference a host. The app checks reachability every 30 s and counts sessions per host; *Check SSH* also counts the tmux sessions there. MCP clients can find a free host and create projects on it.
@@ -239,7 +262,7 @@ npm install
 npm start
 ```
 
-On Windows, `build.bat` does all steps: `build.bat` builds the installer, portable exe and unpacked app, `build.bat dir` only the unpacked app (`win-unpacked`), `build.bat test` runs the unit tests first. The output goes to `release/`. Packages for one platform: `npm run dist:win` or `npm run dist:mac` (macOS packages must be built on a Mac).
+On Windows, `build.bat` does all steps: `build.bat` builds the installer, portable exe and unpacked app, `build.bat dir` only the unpacked app (`win-unpacked`), `build.bat test` runs the unit tests first. On a Mac, `./build-mac.sh` does the same for the dmg, zip and unpacked app (`./build-mac.sh dir`, `./build-mac.sh test`). The output goes to `release/`. Packages for one platform: `npm run dist:win` or `npm run dist:mac` (macOS packages must be built on a Mac).
 
 Tests:
 

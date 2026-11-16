@@ -16,6 +16,8 @@ const askpass = require('./askpass');
 const { AuditLog } = require('./audit');
 const { McpService } = require('./mcp');
 const { OrchestratorManager } = require('./orchestrators');
+const { ScheduleManager } = require('./schedules');
+const { UsageManager } = require('./usage');
 const { filesFor, LocalFiles } = require('./files');
 const { findOpencode } = require('./opencode');
 const { AgentSetup } = require('./coding-agents/deploy');
@@ -43,7 +45,7 @@ if (!process.env.TERMCLAW_USER_DATA && !app.requestSingleInstanceLock()) {
 }
 
 let win = null;
-let store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators;
+let store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules, usage;
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send('event', { channel, payload });
@@ -93,6 +95,8 @@ function setup() {
   git = new GitManager(store);
   mcp = new McpService({ store, sessions, hosts, audit });
   orchestrators = new OrchestratorManager({ store, sessions, mcp, audit, dataDir, notify: (t, b) => notify(t, b) });
+  schedules = new ScheduleManager({ store, sessions, orchestrators, audit, notify: (t, b) => notify(t, b, () => send('show-view', { view: 'sched' })) });
+  usage = new UsageManager({ store, audit });
 
   sessions.on('data', (s, d) => queueData(s.id, d));
   sessions.on('opened', (s) => send('session:opened', s.info()));
@@ -130,9 +134,11 @@ function setup() {
   orchestrators.on('changed', (list) => send('orch:list', list));
   orchestrators.on('messages', (m) => send('orch:messages', m));
   orchestrators.on('live', (m) => send('orch:live', m));
+  schedules.on('changed', (list) => send('sched:list', list));
+  schedules.start();
   store.on('changed', () => send('config:changed', publicConfig()));
   // Test hook: give e2e tests access to the main-process services.
-  if (process.env.TERMCLAW_USER_DATA) global.__termclaw = { store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, notificationLog, api: () => api, agentSetup: () => agentSetup(), targetClass: () => require('./coding-agents/target') };
+  if (process.env.TERMCLAW_USER_DATA) global.__termclaw = { store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules, usage, notificationLog, api: () => api, agentSetup: () => agentSetup(), targetClass: () => require('./coding-agents/target') };
 }
 
 let activeSessionId = null;
@@ -188,6 +194,7 @@ const api = {
     tokens: mcp.listTokens(),
     orchestrators: orchestrators.list(),
     templates: orchestrators.templates(),
+    schedules: schedules.list(),
     platform: process.platform,
     version: app.getVersion(),
     dataDir: app.getPath('userData'),
@@ -318,7 +325,12 @@ const api = {
     return list.filter((t) => !existing.has(t.name)).map((t) => sessions.open(projectId, { ...t, exactName: false }).info());
   },
   closeSession: (id, killTmux) => sessions.close(id, { killTmux }),
-  renameSession: (id, name) => sessions.rename(id, name),
+  renameSession: (id, name) => {
+    const s = sessions.get(id);
+    const before = s && s.name;
+    sessions.rename(id, name);
+    if (s && s.name !== before) schedules.sessionRenamed(s.projectId, before, s.name);
+  },
   setSessionFlags: (id, flags) => sessions.setFlags(id, flags),
   write: (id, data) => { const s = sessions.get(id); if (s) s.write(data); },
   resize: (id, cols, rows) => { const s = sessions.get(id); if (s) s.resize(cols, rows); },
@@ -372,6 +384,19 @@ const api = {
     return t.info();
   },
 
+  // scheduled prompts
+  schedList: () => schedules.list(),
+  schedSave: (s) => schedules.save(s),
+  schedRemove: (id) => schedules.remove(id),
+  schedEnable: (id, on) => schedules.setEnabled(id, on),
+  schedRun: (id) => schedules.run(id, { manual: true }),
+  schedPreview: (cron) => schedules.preview(cron),
+
+  // usage limits of the coding agents on the project's machine
+  usageGet: (projectId, force) => usage.get(projectId, { force: !!force }),
+  usageClaudeOn: (projectId) => usage.installClaude(projectId),
+  usageClaudeOff: (projectId) => usage.removeClaude(projectId),
+
   // settings, import/export
   updateSettings: async (patch) => {
     // Only listener changes need a restart; permissions and OAuth settings are read per request.
@@ -391,9 +416,10 @@ const api = {
     const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'JSON', extensions: ['json'] }] });
     if (r.canceled || !r.filePaths[0]) return null;
     store.importJson(fs.readFileSync(r.filePaths[0], 'utf8'), { merge });
+    schedules.replan();
     return r.filePaths[0];
   },
-  importConfigText: (text, merge) => store.importJson(text, { merge }),
+  importConfigText: (text, merge) => { store.importJson(text, { merge }); schedules.replan(); },
   exportConfigText: () => store.exportJson(),
   openDataDir: () => shell.openPath(app.getPath('userData')),
   detectOpencode: () => findOpencode(store.settings.opencodePath),
@@ -722,6 +748,7 @@ let quitting = false;
 app.on('before-quit', () => {
   if (quitting) return;
   quitting = true;
+  try { schedules.stop(); } catch {}
   try { orchestrators.shutdown(); } catch {}
   try { forwards.shutdown(); } catch {}
   try { docker.shutdown(); } catch {}
