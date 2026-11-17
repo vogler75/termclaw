@@ -41,7 +41,7 @@ export class TermView {
   // onPasteFiles(id, {paths, images}): copied files (local paths) or image data without a file.
   // copyOnSelect(): setting, read when a selection changes. confirmPaste(lines): asked before a paste of
   // several lines into a program that takes them line by line; resolves false to cancel.
-  constructor(id, { fontSize = 13, zoom = 0, scheme = 'default', contrast = false, onZoom, onKey, onDropFiles, onPasteFiles, copyOnSelect, confirmPaste, isMac }) {
+  constructor(id, { fontSize = 13, zoom = 0, scheme = 'default', contrast = false, onZoom, onKey, onDropFiles, onPasteFiles, copyOnSelect, confirmPaste, isMac, optionIsMeta = false }) {
     this.id = id;
     this.baseFontSize = fontSize;
     // Per-session font zoom in px on top of the size the current view asks for (single, tiles, overview).
@@ -77,7 +77,9 @@ export class TermView {
       scrollback: 10000,
       allowProposedApi: true,
       cursorBlink: true,
-      macOptionIsMeta: true,
+      // macOS: Option types characters (~ with Option+N, @, [ ] | on many layouts) like in Terminal.app, unless
+      // the user chose Option as Meta (Settings). As Meta, Option+N sent ESC n to the shell before the ~ arrived.
+      macOptionIsMeta: !!optionIsMeta,
     });
     this.fit = new FitAddon();
     this.term.loadAddon(this.fit);

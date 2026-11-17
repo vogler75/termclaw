@@ -159,7 +159,7 @@ function confirmPaste(lines, text) {
 function termFor(id) {
   let t = terms.get(id);
   if (!t) {
-    t = new TermView(id, { fontSize: S.config.settings.fontSize || 13, zoom: loadZooms()[zoomKey(id)] || 0, scheme: schemeFor(id), contrast: !!S.config.settings.terminalContrast, onZoom: saveZoom, onKey: handleShortcut, onDropFiles: (sid, paths) => files.dropOnTerminal(ctx, sid, paths), onPasteFiles: (sid, what) => files.pasteFiles(ctx, sid, what), copyOnSelect: () => !!S.config.settings.copyOnSelect, confirmPaste, isMac: isMac() });
+    t = new TermView(id, { fontSize: S.config.settings.fontSize || 13, zoom: loadZooms()[zoomKey(id)] || 0, scheme: schemeFor(id), contrast: !!S.config.settings.terminalContrast, onZoom: saveZoom, onKey: handleShortcut, onDropFiles: (sid, paths) => files.dropOnTerminal(ctx, sid, paths), onPasteFiles: (sid, what) => files.pasteFiles(ctx, sid, what), copyOnSelect: () => !!S.config.settings.copyOnSelect, confirmPaste, isMac: isMac(), optionIsMeta: !!S.config.settings.macOptionMeta });
     terms.set(id, t);
   }
   return t;

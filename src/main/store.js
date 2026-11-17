@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   notifications: true,
   usage: true, // usage limits of Claude Code and Codex in the project bar
   menuShells: null, // ids of the local shells in the Session menu; null = the usual ones (connect.js detectLocalShells)
+  macOptionMeta: false, // macOS: Option as the Meta key in terminals instead of typing characters (~ @ [ ] |)
   fontSize: 13,
   terminalScheme: 'default', // color scheme id, see src/renderer/schemes.js
   terminalContrast: false, // raise the contrast of hard to read color combinations
