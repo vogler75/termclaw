@@ -23,7 +23,8 @@ function rowsEditor(items, cols) {
       const o = {};
       r.querySelectorAll('[data-k]').forEach((i) => { o[i.dataset.k] = i.type === 'number' ? Number(i.value) || '' : i.value.trim(); });
       return o;
-    }).filter((o) => Object.entries(o).some(([k, v]) => v !== '' && !(cols.find((c) => c.key === k) || {}).options)),
+    // An untouched row is dropped: nothing typed and every select on its first option.
+    }).filter((o) => Object.entries(o).some(([k, v]) => { const c = cols.find((x) => x.key === k) || {}; return v !== '' && (!c.options || v !== c.options[0][0]); })),
   };
 }
 
@@ -162,7 +163,15 @@ export async function editProject(ctx, p) {
     agentCmdHint.textContent = def.hint(agentCmd.value || def.fallback || '…');
   };
   agentCmd.addEventListener('input', () => { const def = AGENT_COMMAND[cmdType]; if (def) agentCmdHint.textContent = def.hint(agentCmd.value || def.fallback || '…'); });
-  const terms = rowsEditor((p.terminals || []).map((t) => ({ ...t, kind: sessionType(t) })), [{ key: 'name', placeholder: 'Name', small: true }, { key: 'command', placeholder: 'Start command (optional)' }, { key: 'kind', options: SESSION_TYPES }]);
+  // Further dev hosts: terminals on them are in the Session ▾ menu and can be rows of “Start all”.
+  const moreHosts = new Set(p.hosts || []);
+  const hostChecks = S.config.hosts.map((x) => {
+    const cb = h('input', { type: 'checkbox', checked: moreHosts.has(x.id) });
+    return { id: x.id, cb, el: h('label', { class: 'row', title: `${x.user ? x.user + '@' : ''}${x.hostname}:${x.port}` }, cb, x.name) };
+  });
+  const termCols = [{ key: 'name', placeholder: 'Name', small: true }, { key: 'command', placeholder: 'Start command (optional)' }, { key: 'kind', options: SESSION_TYPES }];
+  if (S.config.hosts.length) termCols.push({ key: 'hostId', options: [['', 'Project connection'], ...S.config.hosts.map((x) => [x.id, 'SSH: ' + x.name])] });
+  const terms = rowsEditor((p.terminals || []).map((t) => ({ ...t, kind: sessionType(t) })), termCols);
   const cmds = rowsEditor(p.commands, [{ key: 'name', placeholder: 'Name, e.g. Start agent', small: false }, { key: 'command', placeholder: 'Command, e.g. claude --continue' }]);
   const fwds = rowsEditor(p.forwards, [{ key: 'local', placeholder: 'local', small: true, type: 'number' }, { key: 'remote', placeholder: 'remote', small: true, type: 'number' }, { key: 'remoteHost', placeholder: 'Target host (default localhost)' }]);
 
@@ -218,6 +227,10 @@ export async function editProject(ctx, p) {
     h('h3', { class: 'full' }, 'Local shell (Session ▾ menu)'),
     field('Shell', lsShell, 'A shell on this computer next to the project’s sessions, e.g. PowerShell or WSL for an SSH project. The shells chosen in Settings are also in the menu, started in the home directory.'),
     field('Directory', lsDir, 'Empty = home directory'),
+    h('h3', { class: 'full' }, 'Further hosts (Session ▾ menu)'),
+    h('div', { class: 'full' },
+      hostChecks.length ? h('div', { class: 'row', style: { flexWrap: 'wrap', gap: '4px 16px' } }, hostChecks.map((x) => x.el)) : h('div', { class: 'muted' }, 'No hosts in the host directory yet (Hosts page).'),
+      h('div', { class: 'hint' }, 'Terminals over SSH on other machines next to the project’s own sessions, e.g. several Raspberry Pis in one project. They start in the host’s workspace folder with the host’s user and password; tmux and keep-alive follow the project. Docker, Monitor, Git and agent sessions stay on the project’s connection.')),
     h('h3', { class: 'full' }, 'Terminals (“Start all”)'),
     h('div', { class: 'full' }, terms.el),
     h('h3', { class: 'full' }, 'Saved commands'),
@@ -302,7 +315,11 @@ export async function editProject(ctx, p) {
             },
           };
         })(),
-        terminals: terms.get().map((t) => ({ ...t, name: t.name || 'term', ...fromSessionType(t.kind) })),
+        hosts: hostChecks.filter((x) => x.cb.checked).map((x) => x.id),
+        // A row on another host is a terminal named after the host unless it has a name.
+        terminals: terms.get().map((t) => (t.hostId
+          ? { name: t.name || undefined, command: t.command, kind: 'terminal', hostId: t.hostId }
+          : { name: t.name || 'term', command: t.command, ...fromSessionType(t.kind) })),
         commands: cmds.get().filter((c) => c.name && c.command),
         forwards: fwds.get().filter((f) => f.local && f.remote),
         agentSetup: agentSection.get(),

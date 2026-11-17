@@ -70,6 +70,19 @@ function resolveTarget(project, host) {
   return { hostname: project.host, user: project.user, port: project.port || 22 };
 }
 
+// A terminal session can run on another dev host than the project's connection (session.hostId).
+// The connection then is ssh to that host with the host's own user and password, in its workspace folder;
+// tmux, keep-alive and (for ssh projects) X11 follow the project. Without an id no project password applies.
+function hostSessionProject(project, host) {
+  return {
+    ...project, id: '', type: 'ssh', hostId: host.id, hostUser: '', host: '', user: '', directory: '', remoteOs: 'posix',
+    x11: project.type === 'ssh' ? project.x11 : 'off',
+  };
+}
+
+// Session name for a session on a dev host.
+const hostSessionName = (host) => String(host.name || host.hostname || 'host').toLowerCase().replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'host';
+
 function sshBaseArgs(project, target) {
   const args = [];
   if (target.port && Number(target.port) !== 22) args.push('-p', String(target.port));
@@ -334,5 +347,6 @@ module.exports = {
   setAskpass, sshPassword, batchOpts, authEnv, specEnv,
   SSH_BIN, windowsTarget, windowsOnlyTerminal, windowsSessionCommand, psq, buildSpawn, buildTmuxKill, buildForwardArgs, buildRemoteExec,
   tmuxName, tmuxScript, shq, posixDir, resolveTarget, sshBaseArgs, sshDest, projectDir, x11Mode,
+  hostSessionProject, hostSessionName,
   buildLocalShell, localShellLabel, localShellName, findGitBash, detectLocalShells,
 };

@@ -4,7 +4,7 @@ const { EventEmitter } = require('events');
 const crypto = require('crypto');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
-const { buildSpawn, buildTmuxKill, localShellName, localShellLabel, windowsTarget, specEnv, sshPassword } = require('./connect');
+const { buildSpawn, buildTmuxKill, localShellName, localShellLabel, windowsTarget, specEnv, sshPassword, hostSessionProject, hostSessionName } = require('./connect');
 
 let pty = null;
 function getPty() {
@@ -138,6 +138,8 @@ class TerminalSession extends BaseSession {
     this.rows = opts.rows || 30;
     // Local shell on this computer instead of the project's connection: {id, dir}.
     this.shell = opts.shell && typeof opts.shell.id === 'string' ? { id: opts.shell.id, dir: opts.shell.dir || '' } : null;
+    // Another dev host than the project's connection (host directory id); see connect.js hostSessionProject.
+    this.hostId = !this.shell && typeof opts.hostId === 'string' ? opts.hostId : '';
     this.headless = new Terminal({ cols: this.cols, rows: this.rows, scrollback: 5000, allowProposedApi: true });
     this.serializer = new SerializeAddon();
     this.headless.loadAddon(this.serializer);
@@ -158,18 +160,31 @@ class TerminalSession extends BaseSession {
   }
 
 
-  persistExtra() { return this.shell ? { shell: this.shell } : {}; }
+  persistExtra() { return this.shell ? { shell: this.shell } : this.hostId ? { hostId: this.hostId } : {}; }
 
   info() {
     const i = super.info();
-    return this.shell ? { ...i, shell: { ...this.shell, label: localShellLabel(this.shell.id) } } : i;
+    if (this.shell) return { ...i, shell: { ...this.shell, label: localShellLabel(this.shell.id) } };
+    if (!this.hostId) return i;
+    const h = this.mgr.store.getHost(this.hostId);
+    return { ...i, hostId: this.hostId, type: 'ssh', host: { id: this.hostId, name: h ? h.name : '(deleted host)' } };
+  }
+
+  // Project and host this session connects with: the project's own, or the session's dev host.
+  target() {
+    const project = this.project;
+    if (this.hostId) {
+      const host = this.mgr.store.getHost(this.hostId);
+      if (!host) throw new Error('The host of this session is no longer in the host directory');
+      return { project: hostSessionProject(project, host), host };
+    }
+    return { project, host: project.hostId ? this.mgr.store.getHost(project.hostId) : null };
   }
 
   spawn() {
-    const project = this.project;
-    const host = project.hostId ? this.mgr.store.getHost(project.hostId) : null;
-    let spec;
+    let spec, project, host;
     try {
+      ({ project, host } = this.target());
       spec = buildSpawn(project, host, { id: this.id, name: this.name, command: this.command, shell: this.shell });
     } catch (e) {
       this._fail(e.message);
@@ -355,9 +370,8 @@ class TerminalSession extends BaseSession {
     clearTimeout(this._reconnectTimer);
     if (this.pty) { try { this.pty.kill(); } catch {} this.pty = null; }
     if (killTmux && this.tmuxName) {
-      const project = this.project;
-      const host = project && project.hostId ? this.mgr.store.getHost(project.hostId) : null;
-      const k = project && buildTmuxKill(project, host, this.tmuxName);
+      let k = null;
+      try { const t = this.target(); k = buildTmuxKill(t.project, t.host, this.tmuxName); } catch {}
       if (k) {
         const { spawn } = require('child_process');
         try { spawn(k.file, k.args, { stdio: 'ignore', windowsHide: true, env: specEnv(k) }).on('error', () => {}); } catch {}
@@ -396,8 +410,13 @@ class SessionManager extends EventEmitter {
     const project = this.store.getProject(projectId);
     if (!project) throw new Error('Unknown project ' + projectId);
     // A local shell does not use the project's default session (command, kind).
-    const tpl = opts.shell ? { name: localShellName(opts.shell.id || ''), ...opts, kind: 'terminal' } : { ...project.defaultSession, ...opts };
-    if (windowsTarget(project) && !opts.shell && tpl.kind && tpl.kind !== 'terminal') throw new Error('Agent sessions need a Linux or macOS shell; on Windows machines run the agent in a terminal.');
+    // Neither does a session on another dev host (a terminal named after the host).
+    const onHost = !opts.shell && opts.hostId ? this.store.getHost(opts.hostId) : null;
+    if (!opts.shell && opts.hostId && !onHost) throw new Error('Unknown host ' + opts.hostId);
+    const tpl = opts.shell ? { name: localShellName(opts.shell.id || ''), ...opts, kind: 'terminal' }
+      : onHost ? { command: '', ...opts, name: opts.name || hostSessionName(onHost), kind: 'terminal' }
+      : { ...project.defaultSession, ...opts };
+    if (windowsTarget(project) && !opts.shell && !onHost && tpl.kind && tpl.kind !== 'terminal') throw new Error('Agent sessions need a Linux or macOS shell; on Windows machines run the agent in a terminal.');
     const name = opts.exactName ? opts.name : this.uniqueName(projectId, tpl.name || 'shell');
     const o = { ...tpl, name };
     const s = o.kind === 'agent' ? this.agentFactory(this, project, o)

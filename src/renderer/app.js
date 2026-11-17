@@ -304,6 +304,7 @@ function renderSidebar() {
         dot(s.status, { 'data-dot': s.id }),
         h('span', { class: 'sess-name' }, s.name),
         s.shell ? h('span', { class: 'badge', title: 'Local shell: ' + s.shell.label + (s.shell.dir ? ' · ' + s.shell.dir : '') }, 'local') : null,
+        s.host ? h('span', { class: 'badge', title: 'SSH session on the host ' + s.host.name }, s.host.name) : null,
         s.kind !== 'terminal' ? h('span', { class: 'badge', title: s.kind === 'acp' ? (s.agentName || '') + ' via ACP' : 'OpenCode server API' }, s.kind === 'acp' ? 'acp' : 'agent') : null,
         s.orchestrator ? h('span', { class: 'badge', title: 'Orchestrator-Session' }, 'orch') : null,
         !s.shared ? h('span', { class: 'badge', title: 'Not shared with MCP' }, 'private') : null));
@@ -411,8 +412,10 @@ function sessionMenu(e, s) {
 // File browser in the shell's current directory (terminals) or the project folder.
 async function browseFrom(s) {
   let dir = '';
+  // A session on another dev host browses that host.
+  const ref = s.host ? `${s.projectId}@${s.host.id}` : s.projectId;
   if (s.kind === 'terminal') dir = await call('filesDropTarget', s.id).then((t) => t.dir).catch(() => '');
-  files.openBrowser(ctx, s.projectId, dir);
+  files.openBrowser(ctx, ref, dir);
 }
 
 // Local shells offered in the Session menu: the user's choice (Settings), else the usual ones of this computer.
@@ -428,9 +431,13 @@ async function newSessionMenu(e, p) {
   if (!S.localShells) S.localShells = await call('localShells').catch(() => []);
   const ls = p.localShell || {};
   const label = (id) => (S.localShells.find((x) => x.id === id) || { label: id }).label;
+  const moreHosts = (p.hosts || []).map((id) => S.config.hosts.find((x) => x.id === id)).filter((x) => x && !(p.type === 'ssh' && x.id === p.hostId));
   contextMenu(r.left, r.bottom + 2, [
     { label: `Default session (${p.type === 'local' ? 'local' : p.type.toUpperCase()}${p.directory ? ' · ' + p.directory : ''})`, action: () => openSession(p.id) },
     ...(ls.shell ? [{ label: `Local: ${label(ls.shell)}${ls.directory ? ' · ' + ls.directory : ''}`, action: () => openSession(p.id, { shell: { id: ls.shell, dir: ls.directory || '' } }) }] : []),
+    // Further dev hosts of the project: a terminal over ssh on that host.
+    ...(moreHosts.length ? ['-', ...moreHosts.map((x) => ({ label: `SSH: ${x.name} (${x.user ? x.user + '@' : ''}${x.hostname})`, action: () => openSession(p.id, { hostId: x.id }) }))] : []),
+    ...(moreHosts.length > 1 ? [{ label: `SSH: all ${moreHosts.length} hosts`, action: async () => { for (const x of moreHosts) await openSession(p.id, { hostId: x.id }); } }] : []),
     '-',
     ...menuShells().map((x) => ({ label: x.label, action: () => openSession(p.id, { shell: { id: x.id } }) })),
     '-',
@@ -439,7 +446,7 @@ async function newSessionMenu(e, p) {
     { label: 'GitHub Copilot via ACP', action: () => openSession(p.id, { kind: 'acp', acpAgent: 'copilot', name: 'copilot', command: '' }) },
     ...(p.acpCommands && p.acpCommands.custom ? [{ label: `Other ACP agent: ${p.acpCommands.custom}`, action: () => openSession(p.id, { kind: 'acp', acpAgent: 'custom', name: 'acp-agent', command: '' }) }] : []),
     '-',
-    { label: 'Configure shells and agents…', action: () => pages.editProject(ctx, p) },
+    { label: 'Configure shells, hosts and agents…', action: () => pages.editProject(ctx, p) },
   ]);
 }
 
@@ -529,8 +536,8 @@ function renderProject(main) {
         ondblclick: () => renameSession(s.id),
         onauxclick: (e) => { if (e.button === 1) closeSession(s.id); },
         oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e, s); },
-        title: s.shell ? `Local shell: ${s.shell.label}${s.shell.dir ? ' · ' + s.shell.dir : ''}` : null,
-      }, dot(s.status, { 'data-dot': s.id }), s.shell ? h('span', { class: 'local-tag', title: 'Local shell on this computer' }, '⌂') : null, s.name, h('span', { class: 'x', title: 'Close', onclick: (e) => { e.stopPropagation(); closeSession(s.id); } }, '×'))))
+        title: s.shell ? `Local shell: ${s.shell.label}${s.shell.dir ? ' · ' + s.shell.dir : ''}` : s.host ? `SSH session on the host ${s.host.name}` : null,
+      }, dot(s.status, { 'data-dot': s.id }), s.shell ? h('span', { class: 'local-tag', title: 'Local shell on this computer' }, '⌂') : s.host ? h('span', { class: 'local-tag', title: 'SSH session on the host ' + s.host.name }, '⇄') : null, s.name, h('span', { class: 'x', title: 'Close', onclick: (e) => { e.stopPropagation(); closeSession(s.id); } }, '×'))))
       : [
         dot(projectStatus(p.id), { 'data-pdot': p.id }),
         h('span', { class: 'title' }, p.name),

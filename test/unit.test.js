@@ -213,6 +213,55 @@ test('local shell: any project can open one; no tmux, no default session, home d
   } finally { TS.prototype.spawn = spawn; }
 });
 
+test('session on another dev host: ssh to that host from any project type, host user and workspace, persisted', () => {
+  const { hostSessionProject, hostSessionName } = require('../src/main/connect');
+  const { SessionManager, TerminalSession: TS } = require('../src/main/sessions');
+  const pi2 = { id: 'h2', name: 'Raspberry 2', hostname: 'pi2.lan', port: 2222, user: 'pi', workspace: '~/work' };
+  const local = { id: 'p', name: 'Pis', type: 'local', tmux: true, keepAlive: true, keepAliveInterval: 30, keepAliveCountMax: 3, directory: 'C:\\x', hostUser: 'other', x11: 'display', defaultSession: { name: 'agent', command: 'claude', kind: 'agent' } };
+  const hp = hostSessionProject(local, pi2);
+  assert.strictEqual(hp.id, ''); // no project password applies, only the host's
+  const spec = buildSpawn(hp, pi2, { id: 's', name: 'raspberry-2', command: '' });
+  assert.match(spec.file, /^ssh(\.exe)?$/);
+  assert.deepStrictEqual(spec.args.slice(0, 3), ['-t', '-p', '2222']);
+  assert.ok(spec.args.includes('pi@pi2.lan'));
+  assert.ok(!spec.args.includes('-Y'));
+  assert.strictEqual(spec.tmuxName, 'termclaw-pis-raspberry-2');
+  assert.match(spec.args[spec.args.length - 1], /cd ~\/'work'/);
+  assert.strictEqual(hostSessionName(pi2), 'raspberry-2');
+
+  const store = { getProject: () => local, getHost: (id) => (id === 'h2' ? pi2 : undefined), save() {} };
+  const mgr = Object.create(SessionManager.prototype);
+  mgr.store = store; mgr.sessions = new Map(); mgr.emit = () => {}; mgr.persistOpen = () => {};
+  mgr.agentFactory = () => { throw new Error('agent factory must not be used'); };
+  const spawn = TS.prototype.spawn;
+  TS.prototype.spawn = function () {};
+  try {
+    const s = mgr.open('p', { hostId: 'h2' });
+    assert.strictEqual(s.kind, 'terminal');
+    assert.strictEqual(s.command, '');
+    assert.strictEqual(s.name, 'raspberry-2');
+    assert.deepStrictEqual(s.persistExtra(), { hostId: 'h2' });
+    assert.strictEqual(s.target().host, pi2);
+    assert.strictEqual(s.target().project.type, 'ssh');
+    assert.deepStrictEqual(s.info().host, { id: 'h2', name: 'Raspberry 2' });
+    assert.strictEqual(mgr.open('p', { hostId: 'h2' }).name, 'raspberry-2-2');
+    assert.throws(() => mgr.open('p', { hostId: 'gone' }), /Unknown host/);
+  } finally { TS.prototype.spawn = spawn; }
+});
+
+test('store: deleting a host removes it from the projects\' further hosts and start-all rows', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-hosts-'));
+  const st = new Store(dir);
+  const h1 = st.saveHost({ name: 'pi1', hostname: 'pi1' });
+  const h2 = st.saveHost({ name: 'pi2', hostname: 'pi2' });
+  const p = st.saveProject({ name: 'Pis', hosts: [h1.id, h2.id, h2.id, ''], terminals: [{ name: 'a', hostId: h1.id }, { name: 'b' }] });
+  assert.deepStrictEqual(p.hosts, [h1.id, h2.id]);
+  st.deleteHost(h1.id);
+  assert.deepStrictEqual(st.getProject(p.id).hosts, [h2.id]);
+  assert.deepStrictEqual(st.getProject(p.id).terminals.map((t) => t.name), ['b']);
+  clearTimeout(st._timer);
+});
+
 test('git: porcelain v2 status with rename, untracked, conflict and branch header', () => {
   const { parseStatus } = require('../src/main/git');
   const z = [

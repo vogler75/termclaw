@@ -11,7 +11,7 @@ const { ForwardManager } = require('./forwards');
 const { DockerManager, execCommand: dockerExecCommand } = require('./docker');
 const { MonitorManager } = require('./monitor');
 const { GitManager } = require('./git');
-const { detectLocalShells, setAskpass } = require('./connect');
+const { detectLocalShells, setAskpass, hostSessionProject, hostSessionName } = require('./connect');
 const askpass = require('./askpass');
 const { AuditLog } = require('./audit');
 const { McpService } = require('./mcp');
@@ -159,9 +159,20 @@ function secretKeys(blob) {
   return { envKeys: Object.keys(s.env || {}), headerKeys: Object.keys(s.headers || {}) };
 }
 
-function projectFiles(projectId) {
+// ref: a project id, or "<project id>@<host id>" for the machine of a session on another dev host.
+function fileProject(ref) {
+  return store.getProject(String(ref).split('@')[0]);
+}
+
+function projectFiles(ref) {
+  const [projectId, hostId] = String(ref).split('@');
   const p = store.getProject(projectId);
   if (!p) throw new Error('unknown project');
+  if (hostId) {
+    const host = store.getHost(hostId);
+    if (!host) throw new Error('unknown host');
+    return filesFor(hostSessionProject(p, host), host);
+  }
   return filesFor(p, p.hostId ? store.getHost(p.hostId) : null);
 }
 
@@ -322,7 +333,12 @@ const api = {
     const p = store.getProject(projectId);
     const existing = new Set(sessions.list(projectId).map((s) => s.name));
     const list = p.terminals && p.terminals.length ? p.terminals : [p.defaultSession];
-    return list.filter((t) => !existing.has(t.name)).map((t) => sessions.open(projectId, { ...t, exactName: false }).info());
+    // A row on another dev host without a name is named after the host.
+    const named = list.map((t) => {
+      const h = !t.name && t.hostId ? store.getHost(t.hostId) : null;
+      return h ? { ...t, name: hostSessionName(h) } : t;
+    });
+    return named.filter((t) => !existing.has(t.name)).map((t) => sessions.open(projectId, { ...t, exactName: false }).info());
   },
   closeSession: (id, killTmux) => sessions.close(id, { killTmux }),
   renameSession: (id, name) => {
@@ -455,13 +471,14 @@ const api = {
     if (!s || s.kind !== 'terminal') throw new Error('not a terminal session');
     // A local shell gets the dropped paths as text, like a local project.
     if (s.shell) return { projectId: s.projectId, dir: '', label: 'local', remote: false };
-    const f = projectFiles(s.projectId);
-    return { projectId: s.projectId, dir: await f.sessionCwd(s), label: f.label, remote: !(f instanceof LocalFiles) };
+    const ref = s.hostId ? `${s.projectId}@${s.hostId}` : s.projectId;
+    const f = projectFiles(ref);
+    return { projectId: ref, dir: await f.sessionCwd(s), label: f.label, remote: !(f instanceof LocalFiles) };
   },
   filesExists: (projectId, dir, names) => projectFiles(projectId).exists(dir, names),
   filesMkdir: (projectId, dir, name) => projectFiles(projectId).mkdir(dir, name),
   filesUpload: async (projectId, localPaths, dir, jobId) => {
-    const p = store.getProject(projectId);
+    const p = fileProject(projectId);
     const r = await projectFiles(projectId).upload(localPaths, dir, { onProgress: progress(jobId) });
     audit.add({ source: 'app', action: 'files.upload', detail: `${p.name}: ${localPaths.map((x) => path.basename(x)).join(', ')} → ${dir}` });
     return r;
@@ -474,7 +491,7 @@ const api = {
   filesDownload: async (projectId, items, jobId) => {
     const r = await dialog.showOpenDialog(win, { title: 'Download to folder', defaultPath: app.getPath('downloads'), properties: ['openDirectory', 'createDirectory'] });
     if (r.canceled || !r.filePaths[0]) return null;
-    const p = store.getProject(projectId);
+    const p = fileProject(projectId);
     const out = await projectFiles(projectId).download(items, r.filePaths[0], { onProgress: progress(jobId) });
     audit.add({ source: 'app', action: 'files.download', detail: `${p.name}: ${items.map((i) => i.path).join(', ')} → ${r.filePaths[0]}` });
     return out;

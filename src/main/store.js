@@ -47,6 +47,7 @@ const DEFAULT_SETTINGS = {
 const PROJECT_DEFAULTS = {
   type: 'local', // local | ssh | wsl
   hostId: '',
+  hosts: [], // ids of further dev hosts: terminal sessions on them are offered in the Session menu (any project type)
   host: '',
   user: '',
   port: 22,
@@ -91,6 +92,7 @@ function normalizeProject(p) {
   if (out.type === 'psremote') Object.assign(out, { type: 'ssh', remoteOs: 'windows', port: 22, tmux: false });
   delete out.psremote;
   out.port = Number(out.port) || 22;
+  out.hosts = Array.isArray(p.hosts) ? [...new Set(p.hosts.filter((x) => x && typeof x === 'string'))] : [];
   if (out.remoteOs !== 'windows') out.remoteOs = 'posix';
   return out;
 }
@@ -251,7 +253,11 @@ class Store extends EventEmitter {
   }
   deleteHost(id) {
     this.data.hosts = this.data.hosts.filter((h) => h.id !== id);
-    for (const p of this.data.projects) if (p.hostId === id) p.hostId = '';
+    for (const p of this.data.projects) {
+      if (p.hostId === id) p.hostId = '';
+      p.hosts = (p.hosts || []).filter((x) => x !== id);
+      p.terminals = (p.terminals || []).filter((t) => t.hostId !== id);
+    }
     delete this.data.credentials['host:' + id];
     this.save();
   }

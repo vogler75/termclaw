@@ -94,7 +94,10 @@ export async function pasteFiles(ctx, sessionId, { paths = [], images = [] }) {
 
 // File browser for a project (starts in dir, else the project directory).
 export async function openBrowser(ctx, projectId, dir) {
-  const p = ctx.S.config.projects.find((x) => x.id === projectId);
+  // projectId can be "<project id>@<host id>": the machine of a session on another dev host.
+  const [pid, hid] = String(projectId).split('@');
+  const p = ctx.S.config.projects.find((x) => x.id === pid);
+  const onHost = hid ? ctx.S.config.hosts.find((x) => x.id === hid) : null;
   let cur = null; // {path, entries}
   let selected = new Set();
   let anchor = null;
@@ -168,12 +171,12 @@ export async function openBrowser(ctx, projectId, dir) {
 
   const btn = (label, title, onclick) => h('button', { title, onclick }, label);
   modal({
-    title: `Files — ${p ? p.name : ''}`,
+    title: `Files — ${p ? p.name : ''}${onHost ? ' · ' + onHost.name : ''}`,
     width: '860px',
     body: h('div', { class: 'file-browser' },
       h('div', { class: 'row' },
         btn('↑', 'Parent folder', () => load(parent(cur.path))),
-        btn('⌂', 'Project folder', () => load('')),
+        btn('⌂', onHost ? 'Workspace folder of the host' : 'Project folder', () => load('')),
         pathInput,
         btn('⟳', 'Refresh', () => load(cur.path))),
       list,

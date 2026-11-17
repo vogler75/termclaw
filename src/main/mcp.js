@@ -250,6 +250,7 @@ class McpService extends EventEmitter {
     if (i.kind === 'acp') r.agent = i.agentName;
     if (i.kind === 'agent') r.agent = 'OpenCode';
     if (i.model) r.model = i.model;
+    if (i.host) r.host = i.host.name; // a session on another dev host than the project's connection
     if (i.permission) r.waiting_for = `permission: ${i.permission.title} (answer in the app)`;
     return r;
   }
@@ -285,7 +286,7 @@ class McpService extends EventEmitter {
     const sessionRef = { session: z.string().describe('Session id, name, or "project/name"'), project: z.string().optional().describe('Project name or id (to disambiguate names)') };
 
     tool('list_projects', 'List configured projects.', {}, async () =>
-      this.store.data.projects.map((p) => ({ id: p.id, name: p.name, type: p.type, host: p.hostId ? (this.store.getHost(p.hostId) || {}).name : p.host, directory: p.directory, commands: (p.commands || []).map((c) => c.name) })));
+      this.store.data.projects.map((p) => ({ id: p.id, name: p.name, type: p.type, host: p.hostId ? (this.store.getHost(p.hostId) || {}).name : p.host, hosts: (p.hosts || []).map((id) => (this.store.getHost(id) || {}).name).filter(Boolean), directory: p.directory, commands: (p.commands || []).map((c) => c.name) })));
 
     tool('list_sessions', 'List running sessions with project, name, kind and status (working | waiting | starting | exited | error). kind "agent"/"acp" = agent session with structured messages (preferred for delegating work); kind "terminal" = text terminal (a plain shell or an agent TUI running in it).', { project: z.string().optional() }, async ({ project }) => {
       let list = this._visible(ctx);
@@ -363,11 +364,19 @@ class McpService extends EventEmitter {
       command: z.string().optional(),
       kind: z.enum(['terminal', 'agent', 'acp']).optional(),
       acp_agent: z.enum(['opencode', 'copilot', 'custom']).optional().describe('"custom" uses the ACP command configured in the project'),
-    }, async ({ project, name, command, kind, acp_agent }) => {
+      host: z.string().optional().describe('Open a terminal on one of the project\'s further hosts (name or id) instead of its main connection'),
+    }, async ({ project, name, command, kind, acp_agent, host }) => {
       this._require('allowOpenSession', 'Opening sessions');
       const p = this.store.findProject(project);
       if (!p) throw new Error('Unknown project ' + project);
       const opts = {};
+      if (host) {
+        if (kind && kind !== 'terminal') throw new Error('Sessions on a further host are terminals');
+        const h = this.store.findHost(host);
+        const names = (p.hosts || []).map((id) => (this.store.getHost(id) || {}).name).filter(Boolean);
+        if (!h || !(p.hosts || []).includes(h.id)) throw new Error(`Project ${p.name} has no further host "${host}". Available: ${names.join(', ') || 'none'}`);
+        opts.hostId = h.id;
+      }
       if (name) opts.name = name;
       if (command !== undefined) opts.command = command;
       if (kind) opts.kind = kind;

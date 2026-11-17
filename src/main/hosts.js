@@ -40,8 +40,9 @@ class HostMonitor extends EventEmitter {
   }
 
   appSessionCount(hostId) {
+    // A session counts for its own dev host when it has one, else for its project's host; local shells for none.
     const projects = new Set(this.store.data.projects.filter((p) => p.hostId === hostId).map((p) => p.id));
-    return this.sessions.list().filter((s) => projects.has(s.projectId) && s.status !== 'exited' && s.status !== 'disconnected').length;
+    return this.sessions.list().filter((s) => (s.hostId ? s.hostId === hostId : !s.shell && projects.has(s.projectId)) && s.status !== 'exited' && s.status !== 'disconnected').length;
   }
 
   // Resolve aliases from ~/.ssh/config (HostName / Port) so reachability checks match what ssh does.
