@@ -262,6 +262,24 @@ class Store extends EventEmitter {
     delete this.data.credentials['host:' + id];
     this.save();
   }
+  // Moves a host before another one (or to the end when beforeId is empty).
+  moveHostTo(id, beforeId) {
+    const arr = this.data.hosts;
+    const i = arr.findIndex((h) => h.id === id);
+    if (i < 0 || id === beforeId) return;
+    const [host] = arr.splice(i, 1);
+    const j = beforeId ? arr.findIndex((x) => x.id === beforeId) : -1;
+    if (j < 0) arr.push(host); else arr.splice(j, 0, host);
+    this.save();
+  }
+  moveHost(id, delta) {
+    const i = this.data.hosts.findIndex((h) => h.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= this.data.hosts.length) return;
+    const arr = this.data.hosts;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    this.save();
+  }
 
   // Encrypted ssh password of a host or project (key 'host:<id>' / 'project:<id>'); empty blob removes it.
   getCredential(key) { return this.data.credentials[key] || ''; }

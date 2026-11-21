@@ -142,6 +142,33 @@ test('broken config file is kept as backup', () => {
   assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('config.json.broken-')));
 });
 
+test('hosts can be reordered by delta or target position and order persists', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-unit-'));
+  const st = new Store(dir);
+  const a = st.saveHost({ name: 'alpha', hostname: 'a.local' });
+  const b = st.saveHost({ name: 'beta', hostname: 'b.local' });
+  const c = st.saveHost({ name: 'gamma', hostname: 'c.local' });
+  const names = (store) => store.data.hosts.map((h) => h.name);
+
+  assert.deepStrictEqual(names(st), ['alpha', 'beta', 'gamma']);
+  st.moveHost(a.id, -1); // already first
+  assert.deepStrictEqual(names(st), ['alpha', 'beta', 'gamma']);
+  st.moveHost(c.id, 1); // already last
+  assert.deepStrictEqual(names(st), ['alpha', 'beta', 'gamma']);
+  st.moveHost(c.id, -1);
+  assert.deepStrictEqual(names(st), ['alpha', 'gamma', 'beta']);
+  st.moveHostTo(b.id, a.id); // move beta before alpha
+  assert.deepStrictEqual(names(st), ['beta', 'alpha', 'gamma']);
+  st.moveHostTo(b.id, null); // move beta to end
+  assert.deepStrictEqual(names(st), ['alpha', 'gamma', 'beta']);
+  st.moveHostTo('missing', a.id); // unknown id is a no-op
+  assert.deepStrictEqual(names(st), ['alpha', 'gamma', 'beta']);
+
+  st.saveNow();
+  const st2 = new Store(dir);
+  assert.deepStrictEqual(names(st2), ['alpha', 'gamma', 'beta']);
+});
+
 test('OpenCode messages are simplified oldest first', () => {
   const msgs = [
     { id: 'm3', type: 'idle', time: { created: 3 }, outcome: 'succeeded' },

@@ -309,6 +309,8 @@ const api = {
   // hosts
   saveHost: (h) => { const r = store.saveHost(h); hosts.check(r); return r; },
   deleteHost: (id) => store.deleteHost(id),
+  moveHost: (id, delta) => store.moveHost(id, delta),
+  moveHostTo: (id, beforeId) => store.moveHostTo(id, beforeId),
   // key: 'host:<id>' or 'project:<id>'; an empty password removes the stored one.
   setSshPassword: (key, password) => {
     const m = /^(host|project):([\w-]+)$/.exec(String(key));

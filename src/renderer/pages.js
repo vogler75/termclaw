@@ -1,5 +1,5 @@
 // Editors and secondary pages: project editor, hosts, orchestrators, MCP tokens, audit log, settings.
-import { h, clear, toast, modal, field, confirmDialog, fmtTime, timeAgo } from './ui.js';
+import { h, clear, toast, modal, field, confirmDialog, contextMenu, fmtTime, timeAgo } from './ui.js';
 import { renderMessages, fillStatus } from './chat.js';
 import { projectSetupSection } from './agents.js';
 import { SCHEMES } from './schemes.js';
@@ -348,6 +348,8 @@ export function renderHosts(ctx, main) {
   renderHostsTable(ctx);
 }
 
+let dragHostId = null;
+
 export function renderHostsTable(ctx) {
   const el = document.getElementById('hosts-page');
   if (!el) return;
@@ -358,12 +360,63 @@ export function renderHostsTable(ctx) {
     return;
   }
   const byId = new Map(S.hosts.map((x) => [x.id, x]));
+  const canDrag = S.config.hosts.length > 1;
+  const clearMarks = () => el.querySelectorAll('.row-drop-before, .row-drop-after').forEach((x) => x.classList.remove('row-drop-before', 'row-drop-after'));
+  const below = (e) => { const r = e.currentTarget.getBoundingClientRect(); return e.clientY > r.top + r.height / 2; };
   el.appendChild(h('table', { class: 'list' },
     h('tr', null, ['', 'Name', 'Connection', 'Workspace', 'Tags', 'Reachable', 'Sessions (app / tmux)', ''].map((t) => h('th', null, t))),
-    S.config.hosts.map((host) => {
+    S.config.hosts.map((host, idx) => {
       const st = byId.get(host.id) || {};
-      return h('tr', null,
-        h('td', null, h('span', { class: 'dot ' + (st.reachable ? 'waiting' : st.checkedAt ? 'error' : 'none') })),
+      const deleteHost = async () => { if (await confirmDialog('Delete host', `Delete host “${host.name}”?`, 'Delete')) call('deleteHost', host.id); };
+      return h('tr', {
+        draggable: canDrag ? 'true' : 'false',
+        ondragstart: (e) => {
+          if (!canDrag) return;
+          dragHostId = host.id;
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', host.id);
+          e.currentTarget.classList.add('dragging');
+        },
+        ondragend: (e) => {
+          dragHostId = null;
+          e.currentTarget.classList.remove('dragging');
+          clearMarks();
+        },
+        ondragover: (e) => {
+          if (!dragHostId || dragHostId === host.id) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          clearMarks();
+          e.currentTarget.classList.add(below(e) ? 'row-drop-after' : 'row-drop-before');
+        },
+        ondragleave: (e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('row-drop-before', 'row-drop-after');
+        },
+        ondrop: (e) => {
+          if (!dragHostId || dragHostId === host.id) return;
+          e.preventDefault();
+          const after = below(e);
+          clearMarks();
+          const srcId = dragHostId;
+          dragHostId = null;
+          const ids = S.config.hosts.map((x) => x.id).filter((x) => x !== srcId);
+          const i = ids.indexOf(host.id);
+          call('moveHostTo', srcId, after ? ids[i + 1] || null : host.id);
+        },
+        oncontextmenu: (e) => {
+          e.preventDefault();
+          contextMenu(e.clientX, e.clientY, [
+            ...(idx > 0 ? [{ label: 'Move up', action: () => call('moveHost', host.id, -1) }] : []),
+            ...(idx < S.config.hosts.length - 1 ? [{ label: 'Move down', action: () => call('moveHost', host.id, 1) }] : []),
+            ...(canDrag ? ['-'] : []),
+            { label: 'Edit…', action: () => editHost(ctx, host) },
+            { label: 'Delete…', action: deleteHost },
+          ]);
+        },
+      },
+        h('td', { class: 'host-grip' },
+          canDrag ? h('span', { class: 'drag-handle', title: 'Drag to reorder' }, '⋮⋮') : null,
+          h('span', { class: 'dot ' + (st.reachable ? 'waiting' : st.checkedAt ? 'error' : 'none') })),
         h('td', null, h('b', null, host.name)),
         h('td', { class: 'mono' }, `${host.user ? host.user + '@' : ''}${host.hostname}:${host.port}`),
         h('td', { class: 'mono' }, host.workspace),
@@ -374,8 +427,10 @@ export function renderHostsTable(ctx) {
         h('td', null, h('div', { class: 'row' },
           h('button', { onclick: () => call('checkHostSsh', host.id), title: 'Count tmux sessions via SSH (BatchMode)' }, 'Check SSH'),
           h('button', { onclick: () => quickProject(ctx, host) }, '+ Project'),
-          h('button', { class: 'icon', onclick: () => editHost(ctx, host) }, '✎'),
-          h('button', { class: 'icon danger', onclick: async () => { if (await confirmDialog('Delete host', `Delete host “${host.name}”?`, 'Delete')) call('deleteHost', host.id); } }, '✕'))));
+          canDrag ? h('button', { class: 'icon', title: 'Move up', disabled: idx === 0, onclick: () => call('moveHost', host.id, -1) }, '↑') : null,
+          canDrag ? h('button', { class: 'icon', title: 'Move down', disabled: idx === S.config.hosts.length - 1, onclick: () => call('moveHost', host.id, 1) }, '↓') : null,
+          h('button', { class: 'icon', title: 'Edit host', onclick: () => editHost(ctx, host) }, '✎'),
+          h('button', { class: 'icon danger', title: 'Delete host', onclick: deleteHost }, '✕'))));
     })));
 }
 

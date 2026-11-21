@@ -260,6 +260,11 @@ table.list tr:hover td { background: var(--bg2); }
 .drop-before::before, .drop-after::after { content: ''; position: absolute; left: 6px; right: 6px; height: 2px; background: var(--accent); border-radius: 1px; pointer-events: none; }
 .drop-before::before { top: -1px; }
 .drop-after::after { bottom: -1px; }
+.host-grip { white-space: nowrap; }
+.drag-handle { display: inline-block; cursor: grab; color: var(--fg3); padding: 0 6px 0 2px; user-select: none; letter-spacing: -1px; }
+table.list tr:hover .drag-handle { color: var(--fg2); }
+table.list tr.row-drop-before td { box-shadow: inset 0 2px 0 var(--accent); }
+table.list tr.row-drop-after td { box-shadow: inset 0 -2px 0 var(--accent); }
 .ref-status { min-height: 18px; margin-top: 4px; font-size: 12px; }
 .ref-examples { display: grid; grid-template-columns: max-content minmax(0, 1fr); row-gap: 2px; }
 .ref-example { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; gap: 10px; align-items: center; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 12px; }
