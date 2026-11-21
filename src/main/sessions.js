@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { Terminal } = require('@xterm/headless');
 const { SerializeAddon } = require('@xterm/addon-serialize');
 const { buildSpawn, buildTmuxKill, localShellName, localShellLabel, windowsTarget, specEnv, sshPassword, hostSessionProject, hostSessionName } = require('./connect');
+const { HOSTS_PROJECT_ID } = require('./store');
 
 let pty = null;
 function getPty() {
@@ -86,7 +87,7 @@ class BaseSession extends EventEmitter {
     this.error = null;
   }
 
-  get project() { return this.mgr.store.getProject(this.projectId); }
+  get project() { return this.mgr.store.getSessionProject ? this.mgr.store.getSessionProject(this.projectId) : this.mgr.store.getProject(this.projectId); }
 
   setStatus(status, reason) {
     if (this.status === status) return;
@@ -140,6 +141,8 @@ class TerminalSession extends BaseSession {
     this.shell = opts.shell && typeof opts.shell.id === 'string' ? { id: opts.shell.id, dir: opts.shell.dir || '' } : null;
     // Another dev host than the project's connection (host directory id); see connect.js hostSessionProject.
     this.hostId = !this.shell && typeof opts.hostId === 'string' ? opts.hostId : '';
+    // Per-session tmux override (used by standalone host sessions, which default to a plain SSH login shell).
+    this.tmux = typeof opts.tmux === 'boolean' ? opts.tmux : undefined;
     this.headless = new Terminal({ cols: this.cols, rows: this.rows, scrollback: 5000, allowProposedApi: true });
     this.serializer = new SerializeAddon();
     this.headless.loadAddon(this.serializer);
@@ -160,14 +163,20 @@ class TerminalSession extends BaseSession {
   }
 
 
-  persistExtra() { return this.shell ? { shell: this.shell } : this.hostId ? { hostId: this.hostId } : {}; }
+  persistExtra() {
+    return {
+      ...(this.shell ? { shell: this.shell } : this.hostId ? { hostId: this.hostId } : {}),
+      ...(typeof this.tmux === 'boolean' ? { tmux: this.tmux } : {}),
+    };
+  }
 
   info() {
     const i = super.info();
-    if (this.shell) return { ...i, shell: { ...this.shell, label: localShellLabel(this.shell.id) } };
-    if (!this.hostId) return i;
+    const extra = typeof this.tmux === 'boolean' ? { tmux: this.tmux } : {};
+    if (this.shell) return { ...i, ...extra, shell: { ...this.shell, label: localShellLabel(this.shell.id) } };
+    if (!this.hostId) return { ...i, ...extra };
     const h = this.mgr.store.getHost(this.hostId);
-    return { ...i, hostId: this.hostId, type: 'ssh', host: { id: this.hostId, name: h ? h.name : '(deleted host)' } };
+    return { ...i, ...extra, hostId: this.hostId, type: 'ssh', host: { id: this.hostId, name: h ? h.name : '(deleted host)' } };
   }
 
   // Project and host this session connects with: the project's own, or the session's dev host.
@@ -176,9 +185,10 @@ class TerminalSession extends BaseSession {
     if (this.hostId) {
       const host = this.mgr.store.getHost(this.hostId);
       if (!host) throw new Error('The host of this session is no longer in the host directory');
-      return { project: hostSessionProject(project, host), host };
+      const hp = hostSessionProject(project, host);
+      return { project: typeof this.tmux === 'boolean' ? { ...hp, tmux: this.tmux } : hp, host };
     }
-    return { project, host: project.hostId ? this.mgr.store.getHost(project.hostId) : null };
+    return { project: typeof this.tmux === 'boolean' ? { ...project, tmux: this.tmux } : project, host: project.hostId ? this.mgr.store.getHost(project.hostId) : null };
   }
 
   spawn() {
@@ -407,8 +417,9 @@ class SessionManager extends EventEmitter {
   }
 
   open(projectId, opts = {}) {
-    const project = this.store.getProject(projectId);
+    const project = this.store.getSessionProject ? this.store.getSessionProject(projectId) : this.store.getProject(projectId);
     if (!project) throw new Error('Unknown project ' + projectId);
+    if (projectId === HOSTS_PROJECT_ID && !opts.hostId && !opts.shell) throw new Error('A host session needs a host');
     // A local shell does not use the project's default session (command, kind).
     // Neither does a session on another dev host (a terminal named after the host).
     const onHost = !opts.shell && opts.hostId ? this.store.getHost(opts.hostId) : null;
@@ -539,13 +550,19 @@ class SessionManager extends EventEmitter {
   // Remember open sessions per project so they come back (tmux re-attach) after an app restart.
   persistOpen(projectId) {
     if (this._shuttingDown) return;
-    const p = this.store.getProject(projectId);
-    if (!p) return;
-    p.openSessions = this.list(projectId).map((s) => ({
+    const list = this.list(projectId).map((s) => ({
       name: s.name, command: s.command, kind: s.kind, shared: s.shared, orchestrator: s.orchestrator,
       ...(s.disconnected ? { disconnected: true } : {}),
       ...(s.persistExtra ? s.persistExtra() : {}),
     }));
+    if (projectId === HOSTS_PROJECT_ID) {
+      this.store.data.hostSessions = list;
+      this.store.save();
+      return;
+    }
+    const p = this.store.getProject(projectId);
+    if (!p) return;
+    p.openSessions = list;
     this.store.save();
   }
 
@@ -554,6 +571,9 @@ class SessionManager extends EventEmitter {
       for (const o of p.openSessions || []) {
         try { this.open(p.id, { ...o, exactName: true }); } catch (e) { console.error('restore failed', e); }
       }
+    }
+    for (const o of this.store.data.hostSessions || []) {
+      try { this.open(HOSTS_PROJECT_ID, { ...o, exactName: true }); } catch (e) { console.error('restore host session failed', e); }
     }
   }
 

@@ -406,6 +406,9 @@ export function renderHostsTable(ctx) {
         oncontextmenu: (e) => {
           e.preventDefault();
           contextMenu(e.clientX, e.clientY, [
+            { label: 'Open terminal', action: () => ctx.openHostSession(host.id) },
+            { label: 'Open terminal (tmux)', action: () => ctx.openHostSession(host.id, { tmux: true }) },
+            '-',
             ...(idx > 0 ? [{ label: 'Move up', action: () => call('moveHost', host.id, -1) }] : []),
             ...(idx < S.config.hosts.length - 1 ? [{ label: 'Move down', action: () => call('moveHost', host.id, 1) }] : []),
             ...(canDrag ? ['-'] : []),
@@ -425,6 +428,7 @@ export function renderHostsTable(ctx) {
           st.sshError ? h('div', { class: 'bad', style: { fontSize: '11px' } }, 'ssh: ' + st.sshError) : null),
         h('td', null, `${st.appSessions ?? 0} / ${st.remoteTmux ?? '–'}`),
         h('td', null, h('div', { class: 'row' },
+          h('button', { class: 'primary', onclick: () => ctx.openHostSession(host.id), title: 'Open plain SSH login shell (right-click row for tmux)' }, 'Terminal'),
           h('button', { onclick: () => call('checkHostSsh', host.id), title: 'Count tmux sessions via SSH (BatchMode)' }, 'Check SSH'),
           h('button', { onclick: () => quickProject(ctx, host) }, '+ Project'),
           canDrag ? h('button', { class: 'icon', title: 'Move up', disabled: idx === 0, onclick: () => call('moveHost', host.id, -1) }, '↑') : null,

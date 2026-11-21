@@ -49,14 +49,21 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 /* sidebar */
 .ico { display: inline-flex; width: 16px; height: 16px; flex: none; }
 .ico svg { width: 100%; height: 100%; }
-.sb-nav { display: flex; flex-direction: column; gap: 1px; padding: 10px 8px 6px; }
-.sb-nav button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; background: transparent; border-color: transparent; color: var(--fg2); text-align: left; white-space: nowrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.sb-nav { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px 4px; }
+.sb-nav-row { display: flex; align-items: center; gap: 2px; }
+.sb-nav-row > button:first-child { flex: 1; min-width: 0; }
+.sb-nav-row > button.sb-nav-add { width: auto; flex: none; padding: 3px 6px; font-size: 14px; color: var(--fg3); }
+.sb-nav-row > button.sb-nav-add:hover { color: var(--fg); }
+.host-sessions { margin: 1px 0 3px 16px; }
+.sb-nav button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; background: transparent; border-color: transparent; color: var(--fg2); text-align: left; white-space: nowrap; }
 .sb-nav button:hover { background: var(--bg3); color: var(--fg); }
 .sb-nav button.active { background: var(--bg3); border-color: transparent; color: var(--fg); }
 .sb-nav .ico { color: var(--fg3); }
 .sb-nav .count { margin-left: auto; color: var(--fg3); font-size: 12px; }
 .sb-nav .count.running { color: var(--green); }
-.sb-section { padding: 12px 8px 6px 16px; color: var(--fg2); font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+.sb-section { padding: 8px 8px 4px 14px; color: var(--fg2); font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }
+.sb-section-actions { display: inline-flex; align-items: center; gap: 2px; }
 .sb-section button.icon { padding: 3px; }
 .tree { flex: 1; overflow-y: auto; padding-bottom: 8px; }
 /* Each project is one card, and the only outlined box in the tree. */
@@ -80,8 +87,10 @@ code, .mono { font-family: var(--mono); font-size: 12px; }
 .sess-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess .badge { font-size: 9px; padding: 0 3px; border-radius: 3px; background: var(--bg4); color: var(--fg2); }
 .sb-bottom { border-top: 1px solid var(--border); padding: 6px 8px; display: flex; align-items: center; gap: 2px; }
-.sb-bottom button.icon { padding: 4px; }
-.sb-version { margin-left: auto; font-size: 11px; color: var(--fg3); padding-right: 4px; cursor: pointer; user-select: text; }
+.sb-bottom button.icon { padding: 4px; position: relative; }
+.sb-util-dot { position: absolute; right: 2px; top: 2px; width: 6px; height: 6px; border-radius: 50%; background: var(--fg3); }
+.sb-util-dot.running { background: var(--green); }
+.sb-version { margin-left: auto; font-size: 11px; color: var(--fg3); padding-right: 4px; cursor: pointer; user-select: text; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sb-version:hover { color: var(--fg2); }
 
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--fg3); flex: none; display: inline-block; }

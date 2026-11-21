@@ -289,6 +289,53 @@ test('store: deleting a host removes it from the projects\' further hosts and st
   clearTimeout(st._timer);
 });
 
+test('standalone host sessions: plain SSH by default, optional tmux, persisted and restored without a project', () => {
+  const { HOSTS_PROJECT_ID } = require('../src/main/store');
+  const { SessionManager, TerminalSession: TS } = require('../src/main/sessions');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-hostsess-'));
+  const st = new Store(dir);
+  const h1 = st.saveHost({ name: 'host66', hostname: 'host66.lan', user: 'vogler', workspace: '~/work' });
+  const mgr = new SessionManager(st);
+  const spawn = TS.prototype.spawn;
+  TS.prototype.spawn = function () {};
+  try {
+    assert.throws(() => mgr.open(HOSTS_PROJECT_ID, {}), /needs a host/);
+    const plain = mgr.open(HOSTS_PROJECT_ID, { hostId: h1.id });
+    assert.strictEqual(plain.name, 'host66');
+    const plainTarget = plain.target();
+    assert.strictEqual(plainTarget.project.tmux, false);
+    const plainSpec = buildSpawn(plainTarget.project, plainTarget.host, { id: plain.id, name: plain.name, command: '' });
+    assert.strictEqual(plainSpec.tmuxName, null);
+    assert.ok(plainSpec.args.includes('vogler@host66.lan'));
+
+    const withTmux = mgr.open(HOSTS_PROJECT_ID, { hostId: h1.id, tmux: true });
+    assert.strictEqual(withTmux.name, 'host66-2');
+    const tmuxTarget = withTmux.target();
+    assert.strictEqual(tmuxTarget.project.tmux, true);
+    const tmuxSpec = buildSpawn(tmuxTarget.project, tmuxTarget.host, { id: withTmux.id, name: withTmux.name, command: '' });
+    assert.strictEqual(tmuxSpec.tmuxName, 'termclaw-hosts-host66-2');
+
+    st.saveNow();
+    assert.strictEqual(st.data.projects.length, 0);
+    assert.strictEqual(st.data.hostSessions.length, 2);
+
+    const st2 = new Store(dir);
+    const mgr2 = new SessionManager(st2);
+    mgr2.restoreAll();
+    const restored = mgr2.list(HOSTS_PROJECT_ID);
+    assert.deepStrictEqual(restored.map((s) => [s.name, s.hostId, s.tmux]), [
+      ['host66', h1.id, undefined],
+      ['host66-2', h1.id, true],
+    ]);
+    mgr2.shutdown();
+    clearTimeout(st2._timer);
+  } finally {
+    TS.prototype.spawn = spawn;
+    mgr.shutdown();
+    clearTimeout(st._timer);
+  }
+});
+
 test('git: porcelain v2 status with rename, untracked, conflict and branch header', () => {
   const { parseStatus } = require('../src/main/git');
   const z = [

@@ -2,7 +2,7 @@
 const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { Store } = require('./store');
+const { Store, HOSTS_PROJECT_ID } = require('./store');
 const { SessionManager } = require('./sessions');
 const { AgentSession } = require('./agent');
 const { AcpSession, ACP_AGENTS } = require('./acp');
@@ -161,12 +161,12 @@ function secretKeys(blob) {
 
 // ref: a project id, or "<project id>@<host id>" for the machine of a session on another dev host.
 function fileProject(ref) {
-  return store.getProject(String(ref).split('@')[0]);
+  return store.getSessionProject(String(ref).split('@')[0]);
 }
 
 function projectFiles(ref) {
   const [projectId, hostId] = String(ref).split('@');
-  const p = store.getProject(projectId);
+  const p = store.getSessionProject(projectId);
   if (!p) throw new Error('unknown project');
   if (hostId) {
     const host = store.getHost(hostId);
@@ -304,7 +304,15 @@ const api = {
   moveProjectTo: (id, beforeId) => store.moveProjectTo(id, beforeId),
   moveSessionTo: (id, beforeId) => sessions.moveSessionTo(id, beforeId),
   moveSession: (id, delta) => sessions.moveSession(id, delta),
-  setLayout: (id, layout) => { const p = store.getProject(id); if (p) { p.layout = { ...p.layout, ...layout }; store.save(); } },
+  setLayout: (id, layout) => {
+    if (id === HOSTS_PROJECT_ID) {
+      store.data.hostLayout = { ...(store.data.hostLayout || {}), ...layout };
+      store.save();
+      return;
+    }
+    const p = store.getProject(id);
+    if (p) { p.layout = { ...p.layout, ...layout }; store.save(); }
+  },
 
   // hosts
   saveHost: (h) => { const r = store.saveHost(h); hosts.check(r); return r; },

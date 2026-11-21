@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
 const uid = () => crypto.randomUUID();
+const HOSTS_PROJECT_ID = '__hosts__';
 
 const DEFAULT_SETTINGS = {
   defaultThresholdSec: 5,
@@ -116,6 +117,9 @@ function normalize(data) {
     version: 1,
     settings: { ...DEFAULT_SETTINGS, ...(d.settings || {}), mcp: { ...DEFAULT_SETTINGS.mcp, ...((d.settings || {}).mcp || {}) } },
     hosts: (d.hosts || []).map(normalizeHost),
+    // Standalone terminals opened directly to a configured host (without a project); restored on start.
+    hostSessions: Array.isArray(d.hostSessions) ? d.hostSessions : [],
+    hostLayout: { mode: 'tabs', active: null, ...(d.hostLayout || {}) },
     projects: (d.projects || []).map(normalizeProject),
     tokens: d.tokens || [],
     // OAuth clients (registered by DCR) and approved sign-ins (token hashes); machine-local like tokens.
@@ -197,7 +201,23 @@ class Store extends EventEmitter {
   }
 
   // Projects
+  hostsProject() {
+    return {
+      id: HOSTS_PROJECT_ID,
+      name: 'Hosts',
+      type: 'local',
+      tmux: false,
+      keepAlive: true,
+      keepAliveInterval: 30,
+      keepAliveCountMax: 3,
+      x11: 'off',
+      autoReconnect: false,
+      layout: this.data.hostLayout,
+      openSessions: this.data.hostSessions,
+    };
+  }
   getProject(id) { return this.data.projects.find((p) => p.id === id); }
+  getSessionProject(id) { return id === HOSTS_PROJECT_ID ? this.hostsProject() : this.getProject(id); }
   findProject(idOrName) {
     return this.data.projects.find((p) => p.id === idOrName) || this.data.projects.find((p) => p.name === idOrName);
   }
@@ -318,4 +338,4 @@ class Store extends EventEmitter {
   }
 }
 
-module.exports = { Store, normalizeProject, normalizeHost, stripSecrets, uid, DEFAULT_SETTINGS };
+module.exports = { Store, HOSTS_PROJECT_ID, normalizeProject, normalizeHost, stripSecrets, uid, DEFAULT_SETTINGS };

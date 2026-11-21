@@ -41,7 +41,9 @@ const terms = new Map(); // sessionId -> TermView
 const isMac = () => S.platform === 'darwin';
 
 // ---------- helpers ----------
-export const project = (id) => S.config.projects.find((p) => p.id === id);
+export const HOSTS_PROJECT_ID = '__hosts__';
+const hostsProject = () => ({ id: HOSTS_PROJECT_ID, name: 'Hosts', type: 'local', layout: S.config.hostLayout || { mode: 'tabs' } });
+export const project = (id) => (id === HOSTS_PROJECT_ID ? hostsProject() : S.config.projects.find((p) => p.id === id));
 export const projectSessions = (pid) => [...S.sessions.values()].filter((s) => s.projectId === pid);
 const mode = (p) => (p && p.layout && p.layout.mode) || 'tabs';
 // Extra tabs of a project, before its sessions. Each module has mount(ctx, el, projectId) and unmount().
@@ -198,7 +200,8 @@ function focusActive() {
 }
 
 function setMode(p, m, rerender = true) {
-  p.layout = { ...(p.layout || {}), mode: m };
+  if (p.id === HOSTS_PROJECT_ID) S.config.hostLayout = { ...(S.config.hostLayout || {}), mode: m };
+  else p.layout = { ...(p.layout || {}), mode: m };
   call('setLayout', p.id, { mode: m });
   if (rerender) render();
 }
@@ -224,6 +227,24 @@ export async function openSession(pid, opts = {}) {
   }
 }
 
+export function openHostSession(hostId, opts = {}) {
+  return openSession(HOSTS_PROJECT_ID, { hostId, ...opts });
+}
+
+function hostConnectMenu(e) {
+  const r = e.currentTarget.getBoundingClientRect();
+  const x = e.type === 'contextmenu' ? e.clientX : r.left;
+  const y = e.type === 'contextmenu' ? e.clientY : r.bottom + 2;
+  const hosts = S.config.hosts || [];
+  contextMenu(x, y, [
+    ...(hosts.length
+      ? hosts.map((hx) => ({ label: `${hx.name} (${hx.user ? hx.user + '@' : ''}${hx.hostname})`, action: () => openHostSession(hx.id) }))
+      : [{ label: 'No hosts configured yet', action: () => showView('hosts') }]),
+    '-',
+    { label: 'Manage hosts…', action: () => showView('hosts') },
+  ]);
+}
+
 async function closeSession(id, killTmux = false) {
   const s = S.sessions.get(id);
   if (!s) return;
@@ -241,6 +262,8 @@ const ICONS = {
   audit: svgIcon('<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>'),
   settings: svgIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
   plus: svgIcon('<path d="M12 5v14M5 12h14"/>'),
+  expandAll: svgIcon('<path d="M7 8l5-5 5 5M7 16l5 5 5-5"/>'),
+  collapseAll: svgIcon('<path d="M7 4l5 5 5-5M7 20l5-5 5 5"/>'),
 };
 const icon = (name) => h('span', { class: 'ico', html: ICONS[name] });
 
@@ -251,15 +274,48 @@ function renderSidebar() {
   const sb = clear(document.getElementById('sidebar'));
   const orchRunning = S.orchestrators.filter((o) => o.state !== 'stopped').length;
   const navBtn = (view, ico, label, count, countClass) => h('button', { class: S.view === view ? 'active' : '', onclick: () => showView(view) }, icon(ico), label, count !== undefined ? h('span', { class: 'count' + (countClass ? ' ' + countClass : '') }, count) : null);
+  const hostSessions = projectSessions(HOSTS_PROJECT_ID);
+  const hostsRow = h('div', { class: 'sb-nav-row' },
+    h('button', {
+      class: S.view === 'hosts' ? 'active' : '',
+      onclick: () => showView('hosts'),
+      oncontextmenu: (e) => { e.preventDefault(); hostConnectMenu(e); },
+    }, icon('hosts'), 'Hosts', h('span', { class: 'count' }, S.config.hosts.length)),
+    S.config.hosts.length ? h('button', { class: 'icon sb-nav-add', title: 'Open terminal on a host', onclick: (e) => { e.stopPropagation(); hostConnectMenu(e); } }, '+') : null);
   sb.appendChild(h('div', { class: 'sb-nav' },
-    navBtn('hosts', 'hosts', 'Hosts', S.config.hosts.length),
+    hostsRow,
+    hostSessions.length ? h('div', { class: 'host-sessions' }, hostSessions.map((s) => {
+      const isActive = S.view === 'project' && S.projectId === HOSTS_PROJECT_ID && activeSessionId(HOSTS_PROJECT_ID) === s.id;
+      return h('div', {
+        class: 'sess' + (isActive ? ' active' : ''),
+        ...dragProps({ type: 'session', id: s.id, projectId: HOSTS_PROJECT_ID }),
+        title: `${s.name} — ${STATUS_LABEL[s.status] || s.status}${s.host ? ' · ' + s.host.name : ''}${s.tmux ? ' · tmux' : ''}`,
+        onclick: () => selectSession(s.id),
+        ondblclick: () => renameSession(s.id),
+        oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e, s); },
+      },
+      dot(s.status, { 'data-dot': s.id }),
+      h('span', { class: 'sess-name' }, s.name),
+      s.tmux ? h('span', { class: 'badge', title: 'Running inside tmux' }, 'tmux') : null);
+    })) : null,
     navBtn('orch', 'orch', 'Orchestrators', orchRunning || undefined),
-    navBtn('sched', 'sched', 'Scheduled', S.schedules.filter((x) => x.enabled).length || undefined),
-    navBtn('mcp', 'mcp', 'MCP', S.mcp.running ? '●' : '○', S.mcp.running ? 'running' : ''),
-    navBtn('library', 'library', 'Library', (S.config.mcpLibrary || []).length || undefined),
-    navBtn('audit', 'audit', 'Audit log')));
+    navBtn('sched', 'sched', 'Scheduled', S.schedules.filter((x) => x.enabled).length || undefined)));
+  const collapsible = S.config.projects.filter((p) => projectSessions(p.id).length || extrasOn(p).length);
+  const allCollapsed = collapsible.length > 0 && collapsible.every((p) => S.collapsed.has(p.id));
+  const toggleAllProjects = () => {
+    if (allCollapsed) S.collapsed.clear();
+    else for (const p of S.config.projects) S.collapsed.add(p.id);
+    renderSidebar();
+  };
   sb.appendChild(h('div', { class: 'sb-section' }, 'Projects',
-    h('button', { class: 'icon', title: 'New project', onclick: () => pages.editProject(ctx, null) }, icon('plus'))));
+    h('span', { class: 'sb-section-actions' },
+      collapsible.length ? h('button', {
+        class: 'icon',
+        title: allCollapsed ? 'Expand all projects' : 'Collapse all projects',
+        'aria-label': allCollapsed ? 'Expand all projects' : 'Collapse all projects',
+        onclick: toggleAllProjects,
+      }, icon(allCollapsed ? 'expandAll' : 'collapseAll')) : null,
+      h('button', { class: 'icon', title: 'New project', onclick: () => pages.editProject(ctx, null) }, icon('plus')))));
 
   const tree = h('div', { class: 'tree' });
   S.config.projects.forEach((p, idx) => {
@@ -317,8 +373,18 @@ function renderSidebar() {
   }
   sb.appendChild(tree);
 
+  const bottomBtn = (view, ico, label, title, extra) => h('button', {
+    class: 'icon sb-util' + (S.view === view ? ' active' : ''),
+    title: title || label,
+    'aria-label': label,
+    onclick: () => showView(view),
+  }, icon(ico), h('span', { class: 'sr-only' }, label), extra || null);
+  const libCount = (S.config.mcpLibrary || []).length;
   sb.appendChild(h('div', { class: 'sb-bottom' },
-    h('button', { class: 'icon' + (S.view === 'settings' ? ' active' : ''), title: 'Settings', onclick: () => showView('settings') }, icon('settings')),
+    bottomBtn('settings', 'settings', 'Settings'),
+    bottomBtn('mcp', 'mcp', 'MCP', `MCP (${S.mcp.running ? 'running' : 'stopped'})`, S.mcp.running ? h('span', { class: 'sb-util-dot running' }) : null),
+    bottomBtn('library', 'library', 'Library', libCount ? `Library (${libCount})` : 'Library'),
+    bottomBtn('audit', 'audit', 'Audit log'),
     h('div', { class: 'sb-version', title: 'Version and data folder: Settings', onclick: () => showView('settings') }, `TermClaw ${S.version ? 'v' + S.version : ''}`)));
   // Only now: the bottom buttons take height from the tree, which limits how far it can scroll.
   tree.scrollTop = scrollTop;
@@ -404,8 +470,12 @@ function sessionMenu(e, s) {
       { label: 'Reset font size  (Ctrl 0)', action: () => termFor(s.id).zoomBy(0) },
       { label: 'Color scheme…', action: () => schemeDialog(s) }] : []),
     '-',
-    { label: 'Close (tmux keeps running)', action: () => closeSession(s.id, false) },
-    { label: 'Close and kill tmux session', action: () => closeSession(s.id, true) },
+    ...(s.projectId === HOSTS_PROJECT_ID && !s.tmux
+      ? [{ label: 'Close', action: () => closeSession(s.id, false) }]
+      : [
+        { label: 'Close (tmux keeps running)', action: () => closeSession(s.id, false) },
+        { label: 'Close and kill tmux session', action: () => closeSession(s.id, true) },
+      ]),
   ]);
 }
 
@@ -513,53 +583,66 @@ function forwardInfo(p) {
 function renderProject(main) {
   let p = project(S.projectId);
   if (!p && S.config.projects.length) { p = S.config.projects[0]; S.projectId = p.id; }
+  if (!p && projectSessions(HOSTS_PROJECT_ID).length) { p = hostsProject(); S.projectId = HOSTS_PROJECT_ID; }
   if (!p) {
     main.appendChild(h('div', { class: 'content' }, h('div', { class: 'empty' },
       h('div', { style: { fontSize: '18px', color: 'var(--fg2)' } }, 'TermClaw'),
-      h('div', null, 'Create a project to open terminals.'),
-      h('button', { class: 'primary', onclick: () => pages.editProject(ctx, null) }, '+ Create project'))));
+      h('div', null, 'Create a project or open a terminal to one of your hosts.'),
+      h('div', { class: 'row' },
+        h('button', { class: 'primary', onclick: () => pages.editProject(ctx, null) }, '+ Create project'),
+        S.config.hosts.length ? h('button', { onclick: (e) => hostConnectMenu(e) }, '+ Open host terminal') : null))));
     return;
   }
+  const isHosts = p.id === HOSTS_PROJECT_ID;
   const list = projectSessions(p.id);
   const host = p.hostId ? S.config.hosts.find((x) => x.id === p.hostId) : null;
   const m = mode(p);
-  const ax = activeExtra(p);
+  const ax = isHosts ? null : activeExtra(p);
   // One bar: the tabs on the left, the project's actions on the right. Without tabs (tiles, no sessions) the project name takes their place.
-  const showTabs = (list.length || extrasOn(p).length) && !(m === 'tiles' && list.length > 1 && !ax);
+  const showTabs = (list.length || (!isHosts && extrasOn(p).length)) && !(m === 'tiles' && list.length > 1 && !ax);
   const aid = ax ? null : activeSessionId(p.id);
   main.appendChild(h('div', { class: 'main-head proj-bar' },
     showTabs ? h('div', { class: 'tabs', onwheel: (e) => { e.currentTarget.scrollLeft += e.deltaY; } },
-      extrasOn(p).map((x) => h('div', { class: 'tab dk-tab' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) }, h('span', { style: { fontSize: '12px' } }, x.glyph(p)), x.label)),
+      isHosts ? null : extrasOn(p).map((x) => h('div', { class: 'tab dk-tab' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) }, h('span', { style: { fontSize: '12px' } }, x.glyph(p)), x.label)),
       list.map((s) => h('div', {
         class: 'tab' + (s.id === aid ? ' active' : ''),
         onclick: () => selectSession(s.id),
         ondblclick: () => renameSession(s.id),
         onauxclick: (e) => { if (e.button === 1) closeSession(s.id); },
         oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e, s); },
-        title: s.shell ? `Local shell: ${s.shell.label}${s.shell.dir ? ' · ' + s.shell.dir : ''}` : s.host ? `SSH session on the host ${s.host.name}` : null,
-      }, dot(s.status, { 'data-dot': s.id }), s.shell ? h('span', { class: 'local-tag', title: 'Local shell on this computer' }, '⌂') : s.host ? h('span', { class: 'local-tag', title: 'SSH session on the host ' + s.host.name }, '⇄') : null, s.name, h('span', { class: 'x', title: 'Close', onclick: (e) => { e.stopPropagation(); closeSession(s.id); } }, '×'))))
+        title: s.shell ? `Local shell: ${s.shell.label}${s.shell.dir ? ' · ' + s.shell.dir : ''}` : s.host ? `SSH session on the host ${s.host.name}${s.tmux ? ' (tmux)' : ''}` : null,
+      }, dot(s.status, { 'data-dot': s.id }), s.shell ? h('span', { class: 'local-tag', title: 'Local shell on this computer' }, '⌂') : s.host && !isHosts ? h('span', { class: 'local-tag', title: 'SSH session on the host ' + s.host.name }, '⇄') : null, s.name, h('span', { class: 'x', title: 'Close', onclick: (e) => { e.stopPropagation(); closeSession(s.id); } }, '×'))))
       : [
         dot(projectStatus(p.id), { 'data-pdot': p.id }),
         h('span', { class: 'title' }, p.name),
-        h('span', { class: 'muted' }, [p.type.toUpperCase(), host ? `${p.hostUser || host.user ? (p.hostUser || host.user) + '@' : ''}${host.hostname}` : p.host, p.wslDistro, p.directory, p.tmux ? 'tmux' : null].filter(Boolean).join(' · ')),
+        isHosts ? h('span', { class: 'muted' }, 'Standalone SSH terminals')
+          : h('span', { class: 'muted' }, [p.type.toUpperCase(), host ? `${p.hostUser || host.user ? (p.hostUser || host.user) + '@' : ''}${host.hostname}` : p.host, p.wslDistro, p.directory, p.tmux ? 'tmux' : null].filter(Boolean).join(' · ')),
       ],
-    h('button', { class: 'icon tab-add', title: 'New session (Ctrl+Shift+T)', onclick: () => openSession(p.id) }, '+'),
-    h('button', { class: 'icon', title: 'New session or agent', onclick: (e) => newSessionMenu(e, p) }, '▾'),
+    isHosts
+      ? h('button', { class: 'icon tab-add', title: 'Open terminal on a host', onclick: (e) => hostConnectMenu(e) }, '+')
+      : [
+        h('button', { class: 'icon tab-add', title: 'New session (Ctrl+Shift+T)', onclick: () => openSession(p.id) }, '+'),
+        h('button', { class: 'icon', title: 'New session or agent', onclick: (e) => newSessionMenu(e, p) }, '▾'),
+      ],
     h('div', { class: 'spacer' }),
-    forwardInfo(p),
-    usage.chip(ctx, p),
+    isHosts ? null : forwardInfo(p),
+    isHosts ? null : usage.chip(ctx, p),
     h('button', { class: m === 'tabs' ? 'active' : '', onclick: () => setMode(p, 'tabs') }, 'Tabs'),
     h('button', { class: m === 'tiles' ? 'active' : '', onclick: () => setMode(p, 'tiles'), title: 'Tile view (Ctrl+Shift+G)' }, 'Tiles'),
-    h('button', { title: 'Browse files on the project machine, upload and download (or drop files onto a terminal)', onclick: () => { const sid = activeSessionId(p.id); const s = sid && S.sessions.get(sid); s ? browseFrom(s) : files.openBrowser(ctx, p.id); } }, 'Files'),
-    showTabs ? null : extrasOn(p).map((x) => h('button', { title: x.title, onclick: () => showExtra(p.id, x.key) }, x.label)),
-    h('button', { title: 'Install coding agents, deploy MCP servers and skills', onclick: (e) => agents.agentsMenu(ctx, e, p, activeSessionId(p.id)) }, 'Agents ▾'),
+    h('button', {
+      title: isHosts ? 'Browse files on the active host' : 'Browse files on the project machine, upload and download (or drop files onto a terminal)',
+      disabled: isHosts && !aid,
+      onclick: () => { const sid = activeSessionId(p.id); const s = sid && S.sessions.get(sid); if (s) browseFrom(s); else if (!isHosts) files.openBrowser(ctx, p.id); },
+    }, 'Files'),
+    showTabs || isHosts ? null : extrasOn(p).map((x) => h('button', { title: x.title, onclick: () => showExtra(p.id, x.key) }, x.label)),
+    isHosts ? null : h('button', { title: 'Install coding agents, deploy MCP servers and skills', onclick: (e) => agents.agentsMenu(ctx, e, p, activeSessionId(p.id)) }, 'Agents ▾'),
     (p.terminals || []).length || list.length ? h('button', { class: 'icon', title: 'More actions', onclick: (e) => projectActionsMenu(e, p) }, '⋯') : null,
-    h('button', { class: 'icon', title: 'Edit project', onclick: () => pages.editProject(ctx, p) }, '⚙')));
+    isHosts ? null : h('button', { class: 'icon', title: 'Edit project', onclick: () => pages.editProject(ctx, p) }, '⚙')));
 
   // The bar is rebuilt on every render and its scrollbar is hidden: keep the active tab in view.
   main.querySelector('.proj-bar .tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
-  if ((p.commands || []).length) {
+  if (!isHosts && (p.commands || []).length) {
     const aid = activeSessionId(p.id);
     main.appendChild(h('div', { class: 'cmdbar' },
       h('span', { class: 'muted' }, 'Commands:'),
@@ -570,12 +653,14 @@ function renderProject(main) {
       }, c.name))));
   }
 
-  if (!list.length && !extrasOn(p).length) {
+  if (!list.length && (isHosts || !extrasOn(p).length)) {
     main.appendChild(h('div', { class: 'content' }, h('div', { class: 'empty' },
-      h('div', null, 'No running sessions in this project.'),
+      h('div', null, isHosts ? 'No open host terminals.' : 'No running sessions in this project.'),
       h('div', { class: 'row' },
-        h('button', { class: 'primary', onclick: () => openSession(p.id) }, '+ Open session'),
-        (p.terminals || []).length ? h('button', { onclick: () => startAll(p.id) }, `▶ Start ${p.terminals.length} terminals`) : null))));
+        isHosts ? h('button', { class: 'primary', onclick: (e) => hostConnectMenu(e) }, '+ Open host terminal')
+          : h('button', { class: 'primary', onclick: () => openSession(p.id) }, '+ Open session'),
+        isHosts ? h('button', { onclick: () => showView('hosts') }, 'Manage hosts')
+          : (p.terminals || []).length ? h('button', { onclick: () => startAll(p.id) }, `▶ Start ${p.terminals.length} terminals`) : null))));
     return;
   }
 
@@ -650,13 +735,19 @@ function renderTiles(main, p, list) {
   });
   if (list.length === 3) {
     const head = main.querySelector('.main-head');
-    head.insertBefore(h('button', { title: 'Layout for 3 sessions', onclick: () => { p.layout.three = p.layout.three === 'big' ? 'cols' : 'big'; call('setLayout', p.id, { three: p.layout.three }); render(); } }, p.layout.three === 'big' ? '1+2' : '3 columns'), head.querySelector('.spacer').nextSibling);
+    head.insertBefore(h('button', { title: 'Layout for 3 sessions', onclick: () => {
+      const next = p.layout.three === 'big' ? 'cols' : 'big';
+      if (p.id === HOSTS_PROJECT_ID) S.config.hostLayout = { ...(S.config.hostLayout || {}), three: next };
+      else p.layout.three = next;
+      call('setLayout', p.id, { three: next });
+      render();
+    } }, p.layout.three === 'big' ? '1+2' : '3 columns'), head.querySelector('.spacer').nextSibling);
   }
 }
 
 // Overview of all running sessions, grouped per project. Scaling uses smaller xterm font sizes, not CSS zoom.
 function renderOverview(main) {
-  const groups = S.config.projects.map((p) => ({ p, list: projectSessions(p.id) })).filter((g) => g.list.length);
+  const groups = [hostsProject(), ...S.config.projects].map((p) => ({ p, list: projectSessions(p.id) })).filter((g) => g.list.length);
   const total = groups.reduce((a, g) => a + g.list.length, 0);
   main.appendChild(h('div', { class: 'main-head' },
     h('span', { class: 'title' }, 'Overview'),
@@ -744,7 +835,15 @@ function handleShortcut(e) {
       : (e.code === 'Digit0' || e.code === 'Numpad0') && !e.shiftKey ? 0 : null;
     if (z !== null) { const t = zoomTarget(); if (t) { t.zoomBy(z); return true; } }
   }
-  if (e.shiftKey && e.code === 'KeyT') { if (p) openSession(p.id); return true; }
+  if (e.shiftKey && e.code === 'KeyT') {
+    if (p) {
+      if (p.id === HOSTS_PROJECT_ID) {
+        const s = S.sessions.get(activeSessionId(HOSTS_PROJECT_ID));
+        if (s && s.host) openHostSession(s.host.id, s.tmux ? { tmux: true } : {});
+      } else openSession(p.id);
+    }
+    return true;
+  }
   if (e.shiftKey && e.code === 'KeyG') { if (p) { S.view = 'project'; setMode(p, mode(p) === 'tiles' ? 'tabs' : 'tiles'); } return true; }
   if (e.shiftKey && e.code === 'KeyO') { showView(S.view === 'overview' ? 'project' : 'overview'); return true; }
   if (e.shiftKey && e.code === 'KeyW') { const id = activeSessionId(); if (id) closeSession(id); return true; }
@@ -838,8 +937,8 @@ on('mcp:status', (st) => { S.mcp = st; renderSoon(); });
 on('oauth:request', (r) => pages.oauthApproval(ctx, r));
 on('oauth:decided', ({ id }) => pages.oauthDecided(ctx, id));
 on('config:changed', (cfg) => {
-  const structural = JSON.stringify(cfg.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(cfg.hosts) !==
-    JSON.stringify(S.config.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(S.config.hosts);
+  const structural = JSON.stringify(cfg.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(cfg.hosts) + JSON.stringify(cfg.hostLayout) !==
+    JSON.stringify(S.config.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(S.config.hosts) + JSON.stringify(S.config.hostLayout);
   S.config = cfg;
   if (structural && !['settings', 'orch', 'sched', 'mcp'].includes(S.view)) renderSoon();
 });
@@ -853,7 +952,7 @@ on('show-view', ({ view }) => showView(view));
 // A file dropped anywhere else must not make the window navigate to it.
 for (const ev of ['dragover', 'drop']) document.addEventListener(ev, (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
 
-export const ctx = { S, call, render, renderSoon, showView, openSession, selectSession, project, projectSessions, terms, dot, STATUS_LABEL, closeSession, editProject: (p) => pages.editProject(ctx, p) };
+export const ctx = { S, call, render, renderSoon, showView, openSession, openHostSession, selectSession, project, projectSessions, terms, dot, STATUS_LABEL, closeSession, editProject: (p) => pages.editProject(ctx, p) };
 
 // ---------- boot ----------
 (async () => {
@@ -888,13 +987,13 @@ export const ctx = { S, call, render, renderSoon, showView, openSession, selectS
       call('agentMessages', info.id).then((m) => { S.agentMessages.set(info.id, m || []); renderChatLog(ctx, info.id); });
     }
   }
-  // Restore the active session per project from the saved layout.
-  for (const p of S.config.projects) {
+  // Restore the active session per project (and standalone host sessions) from the saved layout.
+  for (const p of [hostsProject(), ...S.config.projects]) {
     const name = p.layout && p.layout.active;
     const s = name && [...S.sessions.values()].find((x) => x.projectId === p.id && x.name === name);
     if (s) S.active[p.id] = s.id;
   }
-  S.projectId = (S.config.projects[0] || {}).id || null;
+  S.projectId = (S.config.projects[0] || {}).id || (projectSessions(HOSTS_PROJECT_ID).length ? HOSTS_PROJECT_ID : null);
   render();
   window.__termclaw = { S, ctx, terms }; // for tests and debugging
 })();
