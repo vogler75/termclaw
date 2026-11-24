@@ -106,7 +106,7 @@ function normalizeHost(h) {
     hostname: h.hostname || '',
     port: Number(h.port) || 22,
     user: h.user || '',
-    workspace: h.workspace || '~/workspace',
+    workspace: h.workspace || '',
     tags: Array.isArray(h.tags) ? h.tags : String(h.tags || '').split(',').map((s) => s.trim()).filter(Boolean),
   };
 }

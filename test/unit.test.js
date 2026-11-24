@@ -146,6 +146,7 @@ test('hosts can be reordered by delta or target position and order persists', ()
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-unit-'));
   const st = new Store(dir);
   const a = st.saveHost({ name: 'alpha', hostname: 'a.local' });
+  assert.strictEqual(a.workspace, '');
   const b = st.saveHost({ name: 'beta', hostname: 'b.local' });
   const c = st.saveHost({ name: 'gamma', hostname: 'c.local' });
   const names = (store) => store.data.hosts.map((h) => h.name);
@@ -458,4 +459,81 @@ test('terminal copy: shared indentation is removed, relative indentation kept', 
   assert.strictEqual(stripGutter(''), '');
   assert.strictEqual(pasteLines('ls\n'), 1);
   assert.strictEqual(pasteLines('a\r\nb\nc'), 3);
+});
+
+test('hosts menu local shells: zsh on macOS, PowerShell / cmd / WSL on Windows, login shell on Linux', () => {
+  const { hostLocalShells } = require('../src/renderer/host-shells.js');
+
+  assert.deepStrictEqual(hostLocalShells('darwin', [
+    { id: '/bin/bash', label: 'bash', menu: true },
+    { id: '/opt/homebrew/bin/zsh', label: 'zsh', menu: false },
+  ]), [{ id: '/opt/homebrew/bin/zsh', label: 'zsh', menuLabel: 'Local terminal (zsh)' }]);
+
+  assert.deepStrictEqual(hostLocalShells('darwin', []), [
+    { id: '/bin/zsh', label: 'zsh', menuLabel: 'Local terminal (zsh)' },
+  ]);
+
+  assert.deepStrictEqual(hostLocalShells('win32', [
+    { id: 'powershell', label: 'Windows PowerShell', menu: true },
+    { id: 'pwsh', label: 'PowerShell 7', menu: true },
+    { id: 'cmd', label: 'Command Prompt', menu: true },
+    { id: 'gitbash', label: 'Git Bash', menu: true },
+    { id: 'wsl:Ubuntu', label: 'WSL: Ubuntu', menu: true },
+    { id: 'wsl:Debian', label: 'WSL: Debian', menu: true },
+  ]), [
+    { id: 'powershell', label: 'Windows PowerShell', menuLabel: 'Local: Windows PowerShell' },
+    { id: 'pwsh', label: 'PowerShell 7', menuLabel: 'Local: PowerShell 7' },
+    { id: 'cmd', label: 'Command Prompt', menuLabel: 'Local: Command Prompt' },
+    { id: 'wsl:Ubuntu', label: 'WSL: Ubuntu', menuLabel: 'Local: WSL: Ubuntu' },
+    { id: 'wsl:Debian', label: 'WSL: Debian', menuLabel: 'Local: WSL: Debian' },
+  ]);
+
+  assert.deepStrictEqual(hostLocalShells('win32', []), [
+    { id: 'powershell', label: 'Windows PowerShell', menuLabel: 'Local: Windows PowerShell' },
+    { id: 'cmd', label: 'Command Prompt', menuLabel: 'Local: Command Prompt' },
+  ]);
+
+  assert.deepStrictEqual(hostLocalShells('linux', [
+    { id: '/bin/bash', label: 'bash', menu: true },
+    { id: '/bin/zsh', label: 'zsh', menu: false },
+  ]), [{ id: '/bin/bash', label: 'bash', menuLabel: 'Local terminal (bash)' }]);
+});
+
+test('standalone host sessions: local shell opens, spawns, persists and restores without any configured SSH host', () => {
+  const { HOSTS_PROJECT_ID } = require('../src/main/store');
+  const { SessionManager, TerminalSession: TS } = require('../src/main/sessions');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-hostlocal-'));
+  const st = new Store(dir);
+  const mgr = new SessionManager(st);
+  const spawn = TS.prototype.spawn;
+  TS.prototype.spawn = function () {};
+  try {
+    const shellId = process.platform === 'win32' ? 'powershell' : '/bin/zsh';
+    const local = mgr.open(HOSTS_PROJECT_ID, { shell: { id: shellId } });
+    assert.strictEqual(local.name, process.platform === 'win32' ? 'powershell' : 'zsh');
+    assert.deepStrictEqual(local.shell, { id: shellId, dir: '' });
+    const target = local.target();
+    const spec = buildSpawn(target.project, target.host, { id: local.id, name: local.name, command: '', shell: local.shell });
+    assert.strictEqual(spec.tmuxName, null);
+    assert.strictEqual(spec.file, process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh');
+
+    st.saveNow();
+    assert.strictEqual(st.data.hosts.length, 0);
+    assert.strictEqual(st.data.hostSessions.length, 1);
+
+    const st2 = new Store(dir);
+    const mgr2 = new SessionManager(st2);
+    mgr2.restoreAll();
+    const restored = mgr2.list(HOSTS_PROJECT_ID);
+    assert.strictEqual(restored.length, 1);
+    assert.strictEqual(restored[0].name, local.name);
+    assert.deepStrictEqual(restored[0].shell, { id: shellId, dir: '' });
+    mgr2.shutdown();
+    clearTimeout(st2._timer);
+  } finally {
+    TS.prototype.spawn = spawn;
+    mgr.shutdown();
+    clearTimeout(st._timer);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

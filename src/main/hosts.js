@@ -103,7 +103,7 @@ class HostMonitor extends EventEmitter {
 
   async createDirectory(host, relPath) {
     if (!relPath || /(^|\/)\.\.(\/|$)/.test(relPath) || relPath.startsWith('/')) throw new Error('Path must be relative to the workspace folder and must not contain ..');
-    const ws = (host.workspace || '~/workspace').replace(/\/$/, '');
+    const ws = (host.workspace || '~').replace(/\/$/, '');
     const full = `${ws}/${relPath}`;
     const ex = buildRemoteExec({ type: 'ssh', keepAlive: false }, host, `mkdir -p ${posixDir(full)} && cd ${posixDir(full)} && pwd`);
     const r = await runCapture(ex.file, ex.args, undefined, specEnv(ex));

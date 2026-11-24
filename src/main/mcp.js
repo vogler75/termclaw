@@ -429,7 +429,7 @@ class McpService extends EventEmitter {
       if (this.store.findProject(name)) throw new Error('A project with this name already exists');
       const h = this.store.findHost(host);
       if (!h) throw new Error('Unknown host ' + host);
-      const dir = directory || `${(h.workspace || '~/workspace').replace(/\/$/, '')}/${name}`;
+      const dir = directory || `${(h.workspace || '~').replace(/\/$/, '')}/${name}`;
       const p = this.store.saveProject({
         name, type: 'ssh', hostId: h.id, directory: dir, tmux: true, keepAlive: true,
         defaultSession: { name: kind === 'agent' ? 'agent' : 'shell', command: start_command || '', kind: kind || 'terminal' },

@@ -341,6 +341,7 @@ export function renderHosts(ctx, main) {
     h('span', { class: 'title' }, 'Developer hosts'),
     h('span', { class: 'muted' }, 'Login via SSH keys / ssh-agent / ~/.ssh/config, or an optional stored password'),
     h('div', { class: 'spacer' }),
+    h('button', { onclick: (e) => ctx.localTerminalAction(e), title: 'Open a local terminal on this computer' }, ctx.S.platform === 'win32' ? 'Local terminal ▾' : 'Local terminal'),
     h('button', { onclick: () => ctx.call('checkHosts') }, '↻ Check'),
     h('button', { class: 'primary', onclick: () => editHost(ctx, null) }, '+ Host')));
   const page = h('div', { class: 'content' }, h('div', { class: 'page', id: 'hosts-page' }));
@@ -471,12 +472,12 @@ function sshPasswordField(ctx, key) {
 }
 
 function editHost(ctx, host) {
-  const x = host || { port: 22, workspace: '~/workspace', tags: [] };
+  const x = host || { port: 22, workspace: '', tags: [] };
   const name = h('input', { value: x.name || '' });
   const hostname = h('input', { value: x.hostname || '', placeholder: 'Hostname or IP (or an alias from ~/.ssh/config)' });
   const port = h('input', { type: 'number', value: x.port || 22 });
   const user = h('input', { value: x.user || '' });
-  const ws = h('input', { value: x.workspace || '~/workspace' });
+  const ws = h('input', { value: x.workspace || '', placeholder: 'Optional (empty = home directory)' });
   const tags = h('input', { value: (x.tags || []).join(', '), placeholder: 'gpu, large, …' });
   const pw = sshPasswordField(ctx, host ? 'host:' + host.id : '');
   modal({

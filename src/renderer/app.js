@@ -11,6 +11,7 @@ import * as monitor from './monitor.js';
 import * as git from './git.js';
 import * as schedules from './schedules.js';
 import * as usage from './usage.js';
+import { hostLocalShells } from './host-shells.js';
 
 const call = (m, ...a) => window.termclaw.call(m, ...a);
 
@@ -231,18 +232,34 @@ export function openHostSession(hostId, opts = {}) {
   return openSession(HOSTS_PROJECT_ID, { hostId, ...opts });
 }
 
-function hostConnectMenu(e) {
+export function openLocalHostSession(shellId, opts = {}) {
+  return openSession(HOSTS_PROJECT_ID, { shell: { id: shellId }, ...opts });
+}
+
+async function hostConnectMenu(e) {
   const r = e.currentTarget.getBoundingClientRect();
   const x = e.type === 'contextmenu' ? e.clientX : r.left;
   const y = e.type === 'contextmenu' ? e.clientY : r.bottom + 2;
+  if (!S.localShells) S.localShells = await call('localShells').catch(() => []);
   const hosts = S.config.hosts || [];
+  const locals = hostLocalShells(S.platform, S.localShells);
   contextMenu(x, y, [
+    ...locals.map((sh) => ({ label: sh.menuLabel, action: () => openLocalHostSession(sh.id) })),
+    '-',
     ...(hosts.length
       ? hosts.map((hx) => ({ label: `${hx.name} (${hx.user ? hx.user + '@' : ''}${hx.hostname})`, action: () => openHostSession(hx.id) }))
-      : [{ label: 'No hosts configured yet', action: () => showView('hosts') }]),
+      : [{ label: 'No SSH hosts configured yet', action: () => showView('hosts') }]),
     '-',
     { label: 'Manage hosts…', action: () => showView('hosts') },
   ]);
+}
+
+async function localTerminalAction(e) {
+  const r = e.currentTarget.getBoundingClientRect();
+  if (!S.localShells) S.localShells = await call('localShells').catch(() => []);
+  const locals = hostLocalShells(S.platform, S.localShells);
+  if (locals.length === 1) return openLocalHostSession(locals[0].id);
+  contextMenu(r.left, r.bottom + 2, locals.map((sh) => ({ label: sh.label, action: () => openLocalHostSession(sh.id) })));
 }
 
 async function closeSession(id, killTmux = false) {
@@ -281,25 +298,26 @@ function renderSidebar() {
       onclick: () => showView('hosts'),
       oncontextmenu: (e) => { e.preventDefault(); hostConnectMenu(e); },
     }, icon('hosts'), 'Hosts', h('span', { class: 'count' }, S.config.hosts.length)),
-    S.config.hosts.length ? h('button', { class: 'icon sb-nav-add', title: 'Open terminal on a host', onclick: (e) => { e.stopPropagation(); hostConnectMenu(e); } }, '+') : null);
+    h('button', { class: 'icon sb-nav-add', title: 'Open local or host terminal', onclick: (e) => { e.stopPropagation(); hostConnectMenu(e); } }, '+'));
   sb.appendChild(h('div', { class: 'sb-nav' },
+    navBtn('orch', 'orch', 'Orchestrators', orchRunning || undefined),
+    navBtn('sched', 'sched', 'Scheduled', S.schedules.filter((x) => x.enabled).length || undefined),
     hostsRow,
     hostSessions.length ? h('div', { class: 'host-sessions' }, hostSessions.map((s) => {
       const isActive = S.view === 'project' && S.projectId === HOSTS_PROJECT_ID && activeSessionId(HOSTS_PROJECT_ID) === s.id;
       return h('div', {
         class: 'sess' + (isActive ? ' active' : ''),
         ...dragProps({ type: 'session', id: s.id, projectId: HOSTS_PROJECT_ID }),
-        title: `${s.name} — ${STATUS_LABEL[s.status] || s.status}${s.host ? ' · ' + s.host.name : ''}${s.tmux ? ' · tmux' : ''}`,
+        title: `${s.name} — ${STATUS_LABEL[s.status] || s.status}${s.shell ? ' · ' + s.shell.label : s.host ? ' · ' + s.host.name : ''}${s.tmux ? ' · tmux' : ''}`,
         onclick: () => selectSession(s.id),
         ondblclick: () => renameSession(s.id),
         oncontextmenu: (e) => { e.preventDefault(); sessionMenu(e, s); },
       },
       dot(s.status, { 'data-dot': s.id }),
       h('span', { class: 'sess-name' }, s.name),
+      s.shell ? h('span', { class: 'badge', title: 'Local shell: ' + s.shell.label }, 'local') : null,
       s.tmux ? h('span', { class: 'badge', title: 'Running inside tmux' }, 'tmux') : null);
-    })) : null,
-    navBtn('orch', 'orch', 'Orchestrators', orchRunning || undefined),
-    navBtn('sched', 'sched', 'Scheduled', S.schedules.filter((x) => x.enabled).length || undefined)));
+    })) : null));
   const collapsible = S.config.projects.filter((p) => projectSessions(p.id).length || extrasOn(p).length);
   const allCollapsed = collapsible.length > 0 && collapsible.every((p) => S.collapsed.has(p.id));
   const toggleAllProjects = () => {
@@ -590,7 +608,7 @@ function renderProject(main) {
       h('div', null, 'Create a project or open a terminal to one of your hosts.'),
       h('div', { class: 'row' },
         h('button', { class: 'primary', onclick: () => pages.editProject(ctx, null) }, '+ Create project'),
-        S.config.hosts.length ? h('button', { onclick: (e) => hostConnectMenu(e) }, '+ Open host terminal') : null))));
+        h('button', { onclick: (e) => hostConnectMenu(e) }, '+ Open terminal')))));
     return;
   }
   const isHosts = p.id === HOSTS_PROJECT_ID;
@@ -615,11 +633,11 @@ function renderProject(main) {
       : [
         dot(projectStatus(p.id), { 'data-pdot': p.id }),
         h('span', { class: 'title' }, p.name),
-        isHosts ? h('span', { class: 'muted' }, 'Standalone SSH terminals')
+        isHosts ? h('span', { class: 'muted' }, 'Standalone local & SSH terminals')
           : h('span', { class: 'muted' }, [p.type.toUpperCase(), host ? `${p.hostUser || host.user ? (p.hostUser || host.user) + '@' : ''}${host.hostname}` : p.host, p.wslDistro, p.directory, p.tmux ? 'tmux' : null].filter(Boolean).join(' · ')),
       ],
     isHosts
-      ? h('button', { class: 'icon tab-add', title: 'Open terminal on a host', onclick: (e) => hostConnectMenu(e) }, '+')
+      ? h('button', { class: 'icon tab-add', title: 'Open local or host terminal', onclick: (e) => hostConnectMenu(e) }, '+')
       : [
         h('button', { class: 'icon tab-add', title: 'New session (Ctrl+Shift+T)', onclick: () => openSession(p.id) }, '+'),
         h('button', { class: 'icon', title: 'New session or agent', onclick: (e) => newSessionMenu(e, p) }, '▾'),
@@ -630,7 +648,7 @@ function renderProject(main) {
     h('button', { class: m === 'tabs' ? 'active' : '', onclick: () => setMode(p, 'tabs') }, 'Tabs'),
     h('button', { class: m === 'tiles' ? 'active' : '', onclick: () => setMode(p, 'tiles'), title: 'Tile view (Ctrl+Shift+G)' }, 'Tiles'),
     h('button', {
-      title: isHosts ? 'Browse files on the active host' : 'Browse files on the project machine, upload and download (or drop files onto a terminal)',
+      title: isHosts ? 'Browse files for the active terminal' : 'Browse files on the project machine, upload and download (or drop files onto a terminal)',
       disabled: isHosts && !aid,
       onclick: () => { const sid = activeSessionId(p.id); const s = sid && S.sessions.get(sid); if (s) browseFrom(s); else if (!isHosts) files.openBrowser(ctx, p.id); },
     }, 'Files'),
@@ -655,9 +673,9 @@ function renderProject(main) {
 
   if (!list.length && (isHosts || !extrasOn(p).length)) {
     main.appendChild(h('div', { class: 'content' }, h('div', { class: 'empty' },
-      h('div', null, isHosts ? 'No open host terminals.' : 'No running sessions in this project.'),
+      h('div', null, isHosts ? 'No open host or local terminals.' : 'No running sessions in this project.'),
       h('div', { class: 'row' },
-        isHosts ? h('button', { class: 'primary', onclick: (e) => hostConnectMenu(e) }, '+ Open host terminal')
+        isHosts ? h('button', { class: 'primary', onclick: (e) => hostConnectMenu(e) }, '+ Open terminal')
           : h('button', { class: 'primary', onclick: () => openSession(p.id) }, '+ Open session'),
         isHosts ? h('button', { onclick: () => showView('hosts') }, 'Manage hosts')
           : (p.terminals || []).length ? h('button', { onclick: () => startAll(p.id) }, `▶ Start ${p.terminals.length} terminals`) : null))));
@@ -839,7 +857,8 @@ function handleShortcut(e) {
     if (p) {
       if (p.id === HOSTS_PROJECT_ID) {
         const s = S.sessions.get(activeSessionId(HOSTS_PROJECT_ID));
-        if (s && s.host) openHostSession(s.host.id, s.tmux ? { tmux: true } : {});
+        if (s && s.shell) openLocalHostSession(s.shell.id);
+        else if (s && s.host) openHostSession(s.host.id, s.tmux ? { tmux: true } : {});
       } else openSession(p.id);
     }
     return true;
@@ -952,7 +971,7 @@ on('show-view', ({ view }) => showView(view));
 // A file dropped anywhere else must not make the window navigate to it.
 for (const ev of ['dragover', 'drop']) document.addEventListener(ev, (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
 
-export const ctx = { S, call, render, renderSoon, showView, openSession, openHostSession, selectSession, project, projectSessions, terms, dot, STATUS_LABEL, closeSession, editProject: (p) => pages.editProject(ctx, p) };
+export const ctx = { S, call, render, renderSoon, showView, openSession, openHostSession, openLocalHostSession, localTerminalAction, selectSession, project, projectSessions, terms, dot, STATUS_LABEL, closeSession, editProject: (p) => pages.editProject(ctx, p) };
 
 // ---------- boot ----------
 (async () => {
