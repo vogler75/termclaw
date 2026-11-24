@@ -278,6 +278,7 @@ const ICONS = {
   library: svgIcon('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>'),
   audit: svgIcon('<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>'),
   settings: svgIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
+  projects: svgIcon('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   plus: svgIcon('<path d="M12 5v14M5 12h14"/>'),
   expandAll: svgIcon('<path d="M7 8l5-5 5 5M7 16l5 5 5-5"/>'),
   collapseAll: svgIcon('<path d="M7 4l5 5 5-5M7 20l5-5 5 5"/>'),
@@ -298,7 +299,7 @@ function renderSidebar() {
       onclick: () => showView('hosts'),
       oncontextmenu: (e) => { e.preventDefault(); hostConnectMenu(e); },
     }, icon('hosts'), 'Hosts', h('span', { class: 'count' }, S.config.hosts.length)),
-    h('button', { class: 'icon sb-nav-add', title: 'Open local or host terminal', onclick: (e) => { e.stopPropagation(); hostConnectMenu(e); } }, '+'));
+    h('button', { class: 'icon sb-nav-add', title: 'Open local or host terminal', onclick: (e) => { e.stopPropagation(); hostConnectMenu(e); } }, icon('plus')));
   sb.appendChild(h('div', { class: 'sb-nav' },
     navBtn('orch', 'orch', 'Orchestrators', orchRunning || undefined),
     navBtn('sched', 'sched', 'Scheduled', S.schedules.filter((x) => x.enabled).length || undefined),
@@ -325,7 +326,8 @@ function renderSidebar() {
     else for (const p of S.config.projects) S.collapsed.add(p.id);
     renderSidebar();
   };
-  sb.appendChild(h('div', { class: 'sb-section' }, 'Projects',
+  sb.appendChild(h('div', { class: 'sb-section' },
+    h('span', { class: 'sb-section-title' }, icon('projects'), 'Projects'),
     h('span', { class: 'sb-section-actions' },
       collapsible.length ? h('button', {
         class: 'icon',
