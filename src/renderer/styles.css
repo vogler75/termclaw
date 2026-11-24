@@ -206,9 +206,12 @@ table.list tr:hover td { background: var(--bg2); }
 .rows .r input { flex: 1; }
 .rows .r input.small { flex: 0 0 90px; }
 
-.menu { position: fixed; z-index: 200; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; min-width: 200px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+.menu { position: fixed; z-index: 200; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; min-width: 200px; max-height: calc(100vh - 16px); overflow-y: auto; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
 .menu div { padding: 5px 10px; border-radius: 4px; cursor: pointer; }
-.menu div:hover { background: var(--bg4); }
+.menu div:hover, .menu .menu-sub.active { background: var(--bg4); }
+.menu .menu-sub { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.menu .menu-arrow { color: var(--fg3); font-size: 11px; }
+.menu.submenu { z-index: 201; }
 .menu hr { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
 
 #toast-root { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 300; }

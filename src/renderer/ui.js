@@ -93,18 +93,63 @@ export function confirmDialog(title, text, okText = 'OK') {
   });
 }
 
-let openMenu = null;
+let closeOpenMenu = null;
 export function contextMenu(x, y, items) {
-  if (openMenu) openMenu.remove();
-  const m = h('div', { class: 'menu' }, items.map((it) => it === '-' ? h('hr') : h('div', { onclick: () => { m.remove(); openMenu = null; it.action(); } }, it.label)));
+  if (closeOpenMenu) closeOpenMenu();
+  let subMenu = null;
+  let activeSubRow = null;
+  const closeSub = () => {
+    if (subMenu) { subMenu.remove(); subMenu = null; }
+    if (activeSubRow) { activeSubRow.classList.remove('active'); activeSubRow = null; }
+  };
+  const closeAll = () => {
+    closeSub();
+    m.remove();
+    document.removeEventListener('mousedown', onOutside);
+    document.removeEventListener('keydown', onKey);
+    if (closeOpenMenu === closeAll) closeOpenMenu = null;
+  };
+  const buildItem = (it, isSub = false) => {
+    if (it === '-') return h('hr');
+    if (it.children) {
+      const row = h('div', { class: 'menu-sub' }, h('span', null, it.label), h('span', { class: 'menu-arrow' }, '▸'));
+      const openSub = () => {
+        if (activeSubRow === row && subMenu) return;
+        closeSub();
+        activeSubRow = row;
+        row.classList.add('active');
+        const sm = h('div', { class: 'menu submenu' }, it.children.map((c) => buildItem(c, true)));
+        document.body.appendChild(sm);
+        const rr = row.getBoundingClientRect();
+        const sr = sm.getBoundingClientRect();
+        const left = rr.right + sr.width + 4 <= window.innerWidth ? rr.right - 2 : Math.max(4, rr.left - sr.width + 2);
+        const top = Math.min(Math.max(4, rr.top - 4), Math.max(4, window.innerHeight - sr.height - 4));
+        sm.style.left = left + 'px';
+        sm.style.top = top + 'px';
+        subMenu = sm;
+      };
+      row.addEventListener('mouseenter', openSub);
+      row.addEventListener('click', (e) => { e.stopPropagation(); openSub(); });
+      return row;
+    }
+    const row = h('div', { onclick: () => { closeAll(); it.action(); } }, it.label);
+    if (!isSub) row.addEventListener('mouseenter', closeSub);
+    return row;
+  };
+  const m = h('div', { class: 'menu' }, items.map((it) => buildItem(it, false)));
   document.body.appendChild(m);
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(x, window.innerWidth - r.width - 4) + 'px';
   m.style.top = Math.min(y, window.innerHeight - r.height - 4) + 'px';
-  openMenu = m;
-  setTimeout(() => document.addEventListener('mousedown', function off(e) {
-    if (!m.contains(e.target)) { m.remove(); if (openMenu === m) openMenu = null; document.removeEventListener('mousedown', off); }
-  }), 0);
+  closeOpenMenu = closeAll;
+  const onOutside = (e) => {
+    if (!m.contains(e.target) && !(subMenu && subMenu.contains(e.target))) closeAll();
+  };
+  const onKey = (e) => { if (e.key === 'Escape') closeAll(); };
+  setTimeout(() => {
+    document.addEventListener('mousedown', onOutside);
+    document.addEventListener('keydown', onKey);
+  }, 0);
 }
 
 export function field(label, input, hint) {

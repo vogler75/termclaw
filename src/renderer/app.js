@@ -519,13 +519,24 @@ async function newSessionMenu(e, p) {
   if (!S.localShells) S.localShells = await call('localShells').catch(() => []);
   const ls = p.localShell || {};
   const label = (id) => (S.localShells.find((x) => x.id === id) || { label: id }).label;
-  const moreHosts = (p.hosts || []).map((id) => S.config.hosts.find((x) => x.id === id)).filter((x) => x && !(p.type === 'ssh' && x.id === p.hostId));
+  const allHosts = S.config.hosts || [];
+  const moreHosts = (p.hosts || []).map((id) => allHosts.find((x) => x.id === id)).filter((x) => x && !(p.type === 'ssh' && x.id === p.hostId));
   contextMenu(r.left, r.bottom + 2, [
     { label: `Default session (${p.type === 'local' ? 'local' : p.type.toUpperCase()}${p.directory ? ' · ' + p.directory : ''})`, action: () => openSession(p.id) },
     ...(ls.shell ? [{ label: `Local: ${label(ls.shell)}${ls.directory ? ' · ' + ls.directory : ''}`, action: () => openSession(p.id, { shell: { id: ls.shell, dir: ls.directory || '' } }) }] : []),
     // Further dev hosts of the project: a terminal over ssh on that host.
     ...(moreHosts.length ? ['-', ...moreHosts.map((x) => ({ label: `SSH: ${x.name} (${x.user ? x.user + '@' : ''}${x.hostname})`, action: () => openSession(p.id, { hostId: x.id }) }))] : []),
     ...(moreHosts.length > 1 ? [{ label: `SSH: all ${moreHosts.length} hosts`, action: async () => { for (const x of moreHosts) await openSession(p.id, { hostId: x.id }); } }] : []),
+    ...(allHosts.length ? [
+      ...(moreHosts.length ? [] : ['-']),
+      {
+        label: 'SSH host',
+        children: allHosts.map((hx) => ({
+          label: `${hx.name} (${hx.user ? hx.user + '@' : ''}${hx.hostname})`,
+          action: () => openSession(p.id, { hostId: hx.id }),
+        })),
+      },
+    ] : []),
     '-',
     ...menuShells().map((x) => ({ label: x.label, action: () => openSession(p.id, { shell: { id: x.id } }) })),
     '-',
