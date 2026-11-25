@@ -137,7 +137,7 @@ function setup() {
   schedules.start();
   store.on('changed', () => send('config:changed', publicConfig()));
   // Test hook: give e2e tests access to the main-process services.
-  if (process.env.TERMCLAW_USER_DATA) global.__termclaw = { store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules, usage, notificationLog, api: () => api, agentSetup: () => agentSetup(), targetClass: () => require('./coding-agents/target') };
+  if (process.env.TERMCLAW_USER_DATA) global.__termclaw = { store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules, notificationLog, api: () => api, agentSetup: () => agentSetup(), targetClass: () => require('./coding-agents/target') };
 }
 
 let activeSessionId = null;
