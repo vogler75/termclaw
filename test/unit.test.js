@@ -708,6 +708,7 @@ test('git: stash push/show/pop, amend, rename/merge branch and initial-commit di
   g('init', '-b', 'main');
   g('config', 'user.email', 't@example.com');
   g('config', 'user.name', 'Tester');
+  g('config', 'core.autocrlf', 'false');
   g('remote', 'add', 'origin', 'git@code.siemens.com:tf_scada_hmi/winccoa-try-out.git');
 
   const proj = { id: 'p', name: 'p', type: 'local', directory: root, git: { enabled: true, paths: '', depth: 2 } };
