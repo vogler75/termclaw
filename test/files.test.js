@@ -65,6 +65,11 @@ test('local files read: text, truncation, binary detection, image dataUrl, and r
     assert.strictEqual(md.truncated, false);
     assert.strictEqual(md.content, '# Hello\nworld\n');
 
+    const wres = await f.write(path.join(root, 'note.md'), '# Updated\nline 2\n');
+    assert.strictEqual(wres.size, Buffer.byteLength('# Updated\nline 2\n', 'utf8'));
+    const md2 = await f.read(path.join(root, 'note.md'));
+    assert.strictEqual(md2.content, '# Updated\nline 2\n');
+
     const big = await f.read(path.join(root, 'big.txt'), { maxBytes: 50 });
     assert.strictEqual(big.binary, false);
     assert.strictEqual(big.truncated, true);

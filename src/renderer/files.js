@@ -242,13 +242,23 @@ async function loadDir(dir) {
   drawList();
 }
 
-async function openFile(filePath, name) {
+function hasUnsaved(d) {
+  return !!(d && d.file && d.file.editing && d.file.data && d.file.draft !== d.file.data.content);
+}
+
+async function confirmDiscard(d) {
+  if (!hasUnsaved(d)) return true;
+  return confirmDialog('Unsaved changes', `Discard unsaved changes to “${d.file.name}”?`, 'Discard');
+}
+
+async function openFile(filePath, name, { edit = false } = {}) {
   const d = curState();
   if (!d || !mounted) return;
+  if (!(await confirmDiscard(d))) return;
   const pid = mounted.projectId;
   const ref = d.ref;
   const fname = name || base(filePath);
-  d.file = { path: filePath, name: fname, loading: true, error: '', data: null };
+  d.file = { path: filePath, name: fname, loading: true, error: '', data: null, editing: false, draft: '', saving: false };
   d.prettyJson = false;
   d.matchIdx = 0;
   d.matches = [];
@@ -256,12 +266,38 @@ async function openFile(filePath, name) {
   try {
     const data = await call('filesRead', ref, filePath);
     if (!mounted || mounted.projectId !== pid || !d.file || d.file.path !== filePath) return;
-    d.file = { path: data.path || filePath, name: fname, loading: false, error: '', data };
+    const canEdit = !!(data && !data.binary && !data.dataUrl && !data.truncated);
+    d.file = { path: data.path || filePath, name: fname, loading: false, error: '', data, editing: edit && canEdit, draft: edit && canEdit ? data.content : '', saving: false };
   } catch (e) {
     if (!mounted || mounted.projectId !== pid || !d.file || d.file.path !== filePath) return;
-    d.file = { path: filePath, name: fname, loading: false, error: e.message, data: null };
+    d.file = { path: filePath, name: fname, loading: false, error: e.message, data: null, editing: false, draft: '', saving: false };
   }
   drawViewer();
+}
+
+async function saveOpenFile() {
+  const d = curState();
+  if (!d || !d.file || !d.file.editing || !d.file.data || d.file.saving) return false;
+  const f = d.file;
+  f.saving = true;
+  drawViewer();
+  try {
+    const res = await call('filesWrite', d.ref, f.path, f.draft);
+    f.data = { ...f.data, content: f.draft, size: res.size };
+    if (d.cur && Array.isArray(d.cur.entries)) {
+      const entry = d.cur.entries.find((e) => joinPath(d.cur.path, e.name) === f.path);
+      if (entry) { entry.size = res.size; entry.mtime = Date.now(); drawList(); }
+    }
+    toast(`Saved ${f.name}`);
+    f.saving = false;
+    drawViewer();
+    return true;
+  } catch (e) {
+    f.saving = false;
+    toast(`Save failed: ${e.message}`, { error: true, ms: 8000 });
+    drawViewer();
+    return false;
+  }
 }
 
 async function downloadEntries(entries) {
@@ -483,6 +519,7 @@ function drawList() {
           e.type === 'dir'
             ? { label: 'Open folder', action: () => loadDir(full) }
             : { label: 'View file', action: () => openFile(full, e.name) },
+          ...(e.type === 'file' ? [{ label: 'Edit file', action: () => openFile(full, e.name, { edit: true }) }] : []),
           { label: sel.length > 1 ? `Download ${sel.length} items…` : 'Download…', action: () => downloadEntries(sel) },
           { label: 'Copy path', action: () => { navigator.clipboard?.writeText(full); toast('Path copied'); } },
           '-',
@@ -523,29 +560,43 @@ function drawViewer() {
   const isMd = fmt.id === 'markdown';
   const isSvg = fmt.id === 'xml' && f.name.toLowerCase().endsWith('.svg');
   const isJson = fmt.id === 'json' && f.name.toLowerCase().endsWith('.json');
-  const jsonCheck = isJson && data && !data.binary ? validateJson(data.content) : null;
-  const displayText = isJson && d.prettyJson && jsonCheck && jsonCheck.valid ? jsonCheck.pretty : (data ? data.content : '');
+  const canEdit = !!(data && !data.binary && !data.dataUrl && !data.truncated);
+  const isEditing = !!(f.editing && canEdit);
+  const isDirty = isEditing && f.draft !== data.content;
+  const activeText = isEditing ? f.draft : (data ? data.content : '');
+  const jsonCheck = isJson && data && !data.binary ? validateJson(activeText) : null;
+  const displayText = !isEditing && isJson && d.prettyJson && jsonCheck && jsonCheck.valid ? jsonCheck.pretty : activeText;
 
   // Header controls
+  const statusTag = isEditing
+    ? h('span', { class: 'tag ' + (isDirty ? 'warn' : 'ok') }, f.saving ? 'saving…' : isDirty ? 'unsaved' : 'editing')
+    : null;
+  const jsonTag = jsonCheck
+    ? h('span', { class: 'tag ' + (jsonCheck.valid ? 'ok' : 'bad'), title: jsonCheck.error || 'Valid JSON' }, jsonCheck.valid ? 'valid JSON' : 'invalid JSON')
+    : null;
   const headItems = [
     h('span', { class: 'files-view-name mono', title: f.path }, f.name),
     h('span', { class: 'tag' }, data && data.mime ? data.mime.split('/').pop().toUpperCase() : fmt.label),
     data ? h('span', { class: 'muted mono', style: { fontSize: '11px' } }, fmtSize(data.size)) : null,
     data && data.truncated ? h('span', { class: 'tag warn', title: 'File exceeds preview limit; showing first 512 KB' }, 'truncated') : null,
-    jsonCheck ? h('span', { class: 'tag ' + (jsonCheck.valid ? 'ok' : 'bad'), title: jsonCheck.error || 'Valid JSON' }, jsonCheck.valid ? 'valid JSON' : 'invalid JSON') : null,
+    statusTag,
+    jsonTag,
     h('div', { class: 'spacer' }),
   ];
 
-  // VS Code-style Markdown preview toggle: Preview | Split | Source
+  // VS Code-style Markdown preview toggle: Preview | Split | Source (when editing: Split | Source)
   if (isMd && data && !data.binary) {
+    const curMode = isEditing && d.mdMode === 'preview' ? 'split' : d.mdMode;
     const modeBtn = (m, label) => h('button', {
-      class: d.mdMode === m ? 'active' : '',
+      class: curMode === m ? 'active' : '',
       onclick: () => { d.mdMode = m; savePref('filesMdMode', m); drawViewer(); },
     }, label);
-    headItems.push(h('div', { class: 'files-seg' }, modeBtn('preview', 'Preview'), modeBtn('split', 'Split'), modeBtn('source', 'Source')));
+    headItems.push(isEditing
+      ? h('div', { class: 'files-seg' }, modeBtn('split', 'Split'), modeBtn('source', 'Source'))
+      : h('div', { class: 'files-seg' }, modeBtn('preview', 'Preview'), modeBtn('split', 'Split'), modeBtn('source', 'Source')));
   }
 
-  if (isSvg && data && !data.binary) {
+  if (!isEditing && isSvg && data && !data.binary) {
     const modeBtn = (m, label) => h('button', {
       class: d.svgMode === m ? 'active' : '',
       onclick: () => { d.svgMode = m; drawViewer(); },
@@ -553,7 +604,7 @@ function drawViewer() {
     headItems.push(h('div', { class: 'files-seg' }, modeBtn('preview', 'Preview'), modeBtn('source', 'Source')));
   }
 
-  if (jsonCheck && jsonCheck.valid) {
+  if (!isEditing && jsonCheck && jsonCheck.valid) {
     headItems.push(h('button', {
       class: d.prettyJson ? 'active' : '',
       title: 'Pretty-print JSON',
@@ -561,7 +612,7 @@ function drawViewer() {
     }, 'Pretty'));
   }
 
-  const showingSource = data && !data.binary && (!isMd || d.mdMode !== 'preview') && (!isSvg || d.svgMode === 'source');
+  const showingSource = !isEditing && data && !data.binary && (!isMd || d.mdMode !== 'preview') && (!isSvg || d.svgMode === 'source');
   let matchCountEl = null;
   if (showingSource) {
     matchCountEl = h('span', { class: 'muted mono files-match-count' });
@@ -581,15 +632,45 @@ function drawViewer() {
       h('button', { class: d.wrap ? 'active' : '', title: 'Toggle word wrap', onclick: () => { d.wrap = !d.wrap; savePref('filesWrap', d.wrap ? '1' : '0'); drawViewer(); } }, 'Wrap'));
   }
 
-  if (data && !data.binary) {
-    headItems.push(h('button', {
-      title: 'Copy file content',
-      onclick: () => { navigator.clipboard?.writeText(displayText); toast('Copied to clipboard'); },
-    }, 'Copy'));
+  let saveBtn = null;
+  let exitEditBtn = null;
+  if (isEditing) {
+    saveBtn = h('button', {
+      class: 'primary',
+      disabled: f.saving || !isDirty,
+      title: 'Save changes (Ctrl/⌘+S)',
+      onclick: () => saveOpenFile(),
+    }, f.saving ? 'Saving…' : 'Save');
+    exitEditBtn = h('button', {
+      title: isDirty ? 'Discard unsaved changes and exit edit mode' : 'Exit edit mode',
+      onclick: async () => {
+        if (!(await confirmDiscard(d))) return;
+        f.editing = false;
+        f.draft = '';
+        drawViewer();
+      },
+    }, isDirty ? 'Discard' : 'Done');
+    headItems.push(
+      h('button', { class: d.wrap ? 'active' : '', title: 'Toggle word wrap', onclick: () => { d.wrap = !d.wrap; savePref('filesWrap', d.wrap ? '1' : '0'); drawViewer(); } }, 'Wrap'),
+      saveBtn,
+      exitEditBtn);
+  } else {
+    if (canEdit) {
+      headItems.push(h('button', {
+        title: 'Enable editing for this file',
+        onclick: () => { f.editing = true; f.draft = data.content; drawViewer(); },
+      }, 'Edit'));
+    }
+    if (data && !data.binary) {
+      headItems.push(h('button', {
+        title: 'Copy file content',
+        onclick: () => { navigator.clipboard?.writeText(displayText); toast('Copied to clipboard'); },
+      }, 'Copy'));
+    }
+    headItems.push(
+      h('button', { title: 'Download this file', onclick: () => downloadEntries([{ name: f.name, path: f.path, type: 'file', size: (data && data.size) || 0 }]) }, 'Download'),
+      h('button', { class: 'icon', title: 'Reload file', onclick: () => openFile(f.path, f.name) }, '⟳'));
   }
-  headItems.push(
-    h('button', { title: 'Download this file', onclick: () => downloadEntries([{ name: f.name, path: f.path, type: 'file', size: (data && data.size) || 0 }]) }, 'Download'),
-    h('button', { class: 'icon', title: 'Reload file', onclick: () => openFile(f.path, f.name) }, '⟳'));
 
   viewHead.append(...headItems.filter(Boolean));
 
@@ -629,6 +710,72 @@ function drawViewer() {
         openFile(target, base(target));
       },
     };
+
+    if (isEditing) {
+      let previewPane = null;
+      let mdTimer = null;
+      const updateEditHeader = () => {
+        const dirty = f.draft !== data.content;
+        if (statusTag) {
+          statusTag.className = 'tag ' + (dirty ? 'warn' : 'ok');
+          statusTag.textContent = f.saving ? 'saving…' : dirty ? 'unsaved' : 'editing';
+        }
+        if (saveBtn) saveBtn.disabled = f.saving || !dirty;
+        if (exitEditBtn) {
+          exitEditBtn.textContent = dirty ? 'Discard' : 'Done';
+          exitEditBtn.title = dirty ? 'Discard unsaved changes and exit edit mode' : 'Exit edit mode';
+        }
+        if (jsonTag) {
+          const chk = validateJson(f.draft);
+          jsonTag.className = 'tag ' + (chk.valid ? 'ok' : 'bad');
+          jsonTag.textContent = chk.valid ? 'valid JSON' : 'invalid JSON';
+          jsonTag.title = chk.error || 'Valid JSON';
+        }
+      };
+      const ta = h('textarea', {
+        class: 'files-editor' + (d.wrap ? ' wrap' : ''),
+        spellcheck: false,
+        oninput: () => {
+          f.draft = ta.value;
+          updateEditHeader();
+          if (previewPane) {
+            clearTimeout(mdTimer);
+            mdTimer = setTimeout(() => {
+              clear(previewPane);
+              previewPane.appendChild(renderMarkdownPreview(f.draft, mdOpts));
+            }, 150);
+          }
+        },
+        onkeydown: (e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (f.draft !== data.content) saveOpenFile();
+            return;
+          }
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = ta.selectionStart;
+            const end = ta.selectionEnd;
+            ta.value = ta.value.slice(0, start) + '  ' + ta.value.slice(end);
+            ta.selectionStart = ta.selectionEnd = start + 2;
+            f.draft = ta.value;
+            updateEditHeader();
+          }
+        },
+      });
+      ta.value = f.draft;
+      if (isMd && d.mdMode !== 'source') {
+        previewPane = h('div', { class: 'files-split-pane files-md-scroll' }, renderMarkdownPreview(f.draft, mdOpts));
+        viewBody.appendChild(h('div', { class: 'files-split' },
+          h('div', { class: 'files-split-pane' }, ta),
+          previewPane));
+      } else {
+        viewBody.appendChild(ta);
+      }
+      setTimeout(() => ta.focus(), 0);
+      return;
+    }
 
     if (isSvg && d.svgMode === 'preview') {
       const bytes = new TextEncoder().encode(data.content);

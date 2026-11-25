@@ -747,7 +747,6 @@ export function renderSettings(ctx, main) {
   const scheme = h('select', null, SCHEMES.map((sc) => h('option', { value: sc.id, selected: (st.terminalScheme || 'default') === sc.id }, sc.name)));
   const contrast = h('input', { type: 'checkbox', checked: !!st.terminalContrast });
   const notif = h('input', { type: 'checkbox', checked: st.notifications });
-  const usageOn = h('input', { type: 'checkbox', checked: st.usage !== false });
   const copySel = h('input', { type: 'checkbox', checked: !!st.copyOnSelect });
   const pasteWarn = h('input', { type: 'checkbox', checked: st.pasteWarning !== false });
   const optMeta = h('input', { type: 'checkbox', checked: !!st.macOptionMeta });
@@ -772,12 +771,11 @@ export function renderSettings(ctx, main) {
         field('Paste', h('label', { class: 'row' }, pasteWarn, 'Ask before pasting several lines into a program that would run them line by line')),
         S.platform === 'darwin' ? field('Option key', h('label', { class: 'row' }, optMeta, 'Use Option as the Meta key in terminals (Option+B / F / D … for the shell)'), 'Off: Option types characters as in other apps, e.g. ~ with Option+N, and @ [ ] | { } on many keyboard layouts. Option+Enter, Option+Backspace and Option+←/→ work either way.') : null,
         field('Notifications', h('label', { class: 'row' }, notif, 'Desktop notification when a session switches to “waiting”')),
-        field('Usage limits', h('label', { class: 'row' }, usageOn, 'Show how much of the Claude Code and Codex limits is used on the project’s machine (project bar)')),
         field('Shells in the menu', shellChecks, 'Local shells offered under ▾ next to the tabs. A project can still use any shell found here as its own local shell (project editor).'),
         field('OpenCode program', h('div', { class: 'row' }, oc, h('button', { onclick: async () => { const p = await call('detectOpencode'); ocInfo.textContent = p ? 'found: ' + p : 'not found'; } }, 'Detect')), null),
         h('div', { class: 'hint' }, ocInfo),
         h('div', { class: 'full row' }, h('div', { class: 'spacer' }), h('button', { class: 'primary', onclick: async () => {
-          await call('updateSettings', { defaultThresholdSec: Number(thr.value) || 5, fontSize: Number(fs.value) || 13, overviewFontSize: Number(ofs.value) || null, terminalScheme: scheme.value, terminalContrast: contrast.checked, copyOnSelect: copySel.checked, pasteWarning: pasteWarn.checked, macOptionMeta: optMeta.checked, notifications: notif.checked, usage: usageOn.checked, opencodePath: oc.value.trim(), ...(shellList.length ? { menuShells: [...shellChecks.querySelectorAll('input[data-shell]')].filter((c) => c.checked).map((c) => c.dataset.shell) } : {}) });
+          await call('updateSettings', { defaultThresholdSec: Number(thr.value) || 5, fontSize: Number(fs.value) || 13, overviewFontSize: Number(ofs.value) || null, terminalScheme: scheme.value, terminalContrast: contrast.checked, copyOnSelect: copySel.checked, pasteWarning: pasteWarn.checked, macOptionMeta: optMeta.checked, notifications: notif.checked, opencodePath: oc.value.trim(), ...(shellList.length ? { menuShells: [...shellChecks.querySelectorAll('input[data-shell]')].filter((c) => c.checked).map((c) => c.dataset.shell) } : {}) });
           for (const t of ctx.terms.values()) { t.baseFontSize = Number(fs.value) || 13; t.term.options.macOptionIsMeta = optMeta.checked; }
           await reloadConfig(ctx);
           toast('Saved');

@@ -11,7 +11,6 @@ const HOSTS_PROJECT_ID = '__hosts__';
 const DEFAULT_SETTINGS = {
   defaultThresholdSec: 5,
   notifications: true,
-  usage: true, // usage limits of Claude Code and Codex in the project bar
   sortProjectsByName: false, // keep projects in the sidebar sorted alphabetically by name
   menuShells: null, // ids of the local shells in the Session menu; null = the usual ones (connect.js detectLocalShells)
   macOptionMeta: false, // macOS: Option as the Meta key in terminals instead of typing characters (~ @ [ ] |)
@@ -75,7 +74,7 @@ const PROJECT_DEFAULTS = {
   commands: [], // saved commands [{name, command}]
   forwards: [], // [{local, remote, remoteHost}]
   agentCommand: 'opencode',
-  layout: { mode: 'tabs', active: null },
+  layout: { mode: 'tabs', active: null, openTools: [] },
   openSessions: [], // [{name, command, kind, shared}] restored on start
   // Coding agent setup: which MCP servers / skills to deploy, to which agents, project or user scope.
   agentSetup: { scope: 'project', agents: 'auto', mcp: [], skills: [], apm: [] },
@@ -86,6 +85,7 @@ function normalizeProject(p) {
   out.id = out.id || uid();
   out.defaultSession = { ...PROJECT_DEFAULTS.defaultSession, ...(p.defaultSession || {}) };
   out.layout = { ...PROJECT_DEFAULTS.layout, ...(p.layout || {}) };
+  out.layout.openTools = Array.isArray(out.layout.openTools) ? [...new Set(out.layout.openTools.filter((x) => typeof x === 'string'))] : [];
   out.agentSetup = { ...PROJECT_DEFAULTS.agentSetup, ...(p.agentSetup || {}) };
   out.docker = { ...PROJECT_DEFAULTS.docker, ...(p.docker || {}) };
   out.monitor = { ...PROJECT_DEFAULTS.monitor, ...(p.monitor || {}) };

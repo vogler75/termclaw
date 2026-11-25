@@ -16,6 +16,8 @@ let mounted = null; // { ctx, projectId, root }
 let pointerDown = false;
 let pendingDraw = false;
 const busy = new Map(); // container / image id or volume name -> action in progress
+const activeOps = new Map(); // opId -> { projectId, kind, label }
+let nextOpId = 1;
 const sel = { containers: new Set(), images: new Set(), volumes: new Set() }; // selection per list
 let lastClick = { set: null, index: -1 }; // for Shift+click ranges
 let selProject = null;
@@ -225,7 +227,22 @@ function tableArea(ctx, p, snap) {
   if (view.sub === 'images') table = imagesTable(p, df, snap, match);
   else if (view.sub === 'volumes') table = volumesTable(p, df, snap, match);
   else table = containersTable(ctx, p, snap, match);
-  return h('div', null, bar, selectionBar(p, snap, df), table);
+  return h('div', null, bar, progressBanner(p.id), selectionBar(p, snap, df), table);
+}
+
+function projectOps(pid) {
+  return [...activeOps.values()].filter((o) => o.projectId === pid);
+}
+
+function progressBanner(pid) {
+  const ops = projectOps(pid);
+  if (!ops.length) return null;
+  const label = ops.length === 1 ? ops[0].label : `${ops[0].label} (+${ops.length - 1} more)`;
+  return h('div', { class: 'dk-progress', role: 'status', 'aria-live': 'polite' },
+    h('div', { class: 'dk-progress-head' },
+      h('span', { class: 'dk-spinner' }),
+      h('span', null, label)),
+    h('div', { class: 'dk-progress-track' }, h('div', { class: 'dk-progress-fill' })));
 }
 
 const prune = (set, ids) => { const keep = new Set(ids); for (const id of [...set]) if (!keep.has(id)) set.delete(id); };
@@ -254,12 +271,14 @@ function selCell(set, keys, i, label) {
 
 // Toolbar above the list: actions for the selection, otherwise cleanup of unused items.
 function selectionBar(p, snap, df) {
-  const btn = (label, title, onclick, cls) => h('button', { class: cls || '', title, onclick }, label);
+  const btn = (label, title, onclick, cls, disabled = false) => h('button', { class: cls || '', title, disabled, onclick }, label);
+  const ops = projectOps(p.id);
   if (view.sub === 'containers') {
     const items = snap.containers.filter((c) => sel.containers.has(c.id));
     const run = (action) => runBulk(p, 'container', action, items.map((c) => ({ id: c.id, name: c.name })));
+    const pruning = ops.some((o) => o.kind === 'prune:container');
     if (!items.length) return h('div', { class: 'dk-selbar' }, h('span', { class: 'muted' }, 'Select containers to start, stop or remove several at once.'), h('div', { class: 'spacer' }),
-      btn('Remove stopped…', 'Remove all stopped containers', () => pruneDialog(p, 'container')));
+      btn(pruning ? 'Removing…' : 'Remove stopped…', 'Remove all stopped containers', () => pruneDialog(p, 'container'), '', pruning));
     return h('div', { class: 'dk-selbar active' }, h('b', null, `${items.length} selected`),
       btn('▶ Start', 'Start the selected containers', () => run('start')),
       btn('■ Stop', 'Stop the selected containers', () => run('stop')),
@@ -275,8 +294,9 @@ function selectionBar(p, snap, df) {
   const items = !df ? [] : kind === 'image'
     ? df.images.filter((im) => set.has(im.id)).map((im) => ({ id: im.id, name: im.tags[0] || im.id.replace(/^sha256:/, '').slice(0, 12), tags: im.tags, containers: im.containers }))
     : df.volumes.filter((v) => set.has(v.name)).map((v) => ({ id: v.name, name: v.name, refs: v.refs }));
+  const pruning = ops.some((o) => o.kind === 'prune:' + kind);
   if (!items.length) return h('div', { class: 'dk-selbar' }, h('span', { class: 'muted' }, `Select ${view.sub} to remove several at once.`), h('div', { class: 'spacer' }),
-    btn('Remove unused…', `Remove ${view.sub} that no container uses`, () => pruneDialog(p, kind)));
+    btn(pruning ? 'Removing…' : 'Remove unused…', `Remove ${view.sub} that no container uses`, () => pruneDialog(p, kind), '', pruning));
   return h('div', { class: 'dk-selbar active' }, h('b', null, `${items.length} selected`),
     btn('Remove…', `Remove the selected ${view.sub}`, () => removeDialog(p, kind, items), 'danger'),
     h('div', { class: 'spacer' }), btn('Clear', 'Clear the selection', () => { set.clear(); draw(); }));
@@ -403,9 +423,13 @@ function volumesTable(p, df, snap, match) {
 
 const BUSY_LABEL = { start: 'starting', stop: 'stopping', restart: 'restarting', pause: 'pausing', unpause: 'resuming', kill: 'killing', remove: 'removing' };
 
-// One action on one or more items; shows progress in the rows and a summary when done.
+// One action on one or more items; shows progress in the banner & rows and a summary when done.
 async function runBulk(p, kind, action, items, opts = {}) {
-  for (const it of items) busy.set(it.id, BUSY_LABEL[action] || action);
+  const opId = nextOpId++;
+  const actWord = BUSY_LABEL[action] || action;
+  const label = `${actWord[0].toUpperCase() + actWord.slice(1)} ${items.length} ${kind}${items.length === 1 ? '' : 's'}…`;
+  activeOps.set(opId, { projectId: p.id, kind: `${action}:${kind}`, label });
+  for (const it of items) busy.set(it.id, actWord);
   draw();
   try {
     const results = await call('dockerBulk', p.id, kind, action, items, opts);
@@ -417,6 +441,7 @@ async function runBulk(p, kind, action, items, opts = {}) {
   } catch (e) {
     toast(e.message, { error: true, ms: 8000 });
   } finally {
+    activeOps.delete(opId);
     for (const it of items) busy.delete(it.id);
     draw();
   }
@@ -465,10 +490,24 @@ function pruneDialog(p, kind) {
     body: h('div', { class: 'dk-confirm' }, h('div', null, kind === 'container' ? 'Every container that is not running is removed.' : `Only ${kind}s that no container uses are removed.`), opt ? opt.el : null),
     okText: 'Remove',
     onOk: async () => {
+      const all = opt ? opt.cb.checked : false;
+      const opId = nextOpId++;
+      const label = kind === 'container'
+        ? 'Removing stopped containers…'
+        : kind === 'image'
+          ? (all ? 'Removing all unused images…' : 'Removing dangling images…')
+          : (all ? 'Removing all unused volumes…' : 'Removing unused anonymous volumes…');
+      activeOps.set(opId, { projectId: p.id, kind: 'prune:' + kind, label });
+      draw();
       try {
-        const r = await call('dockerPrune', p.id, kind, { all: opt ? opt.cb.checked : false });
+        const r = await call('dockerPrune', p.id, kind, { all });
         toast(`Removed ${r.count} ${kind}${r.count === 1 ? '' : 's'}${r.space ? `, ${fmtSize(r.space)} freed` : ''}`);
-      } catch (e) { toast(e.message, { error: true, ms: 8000 }); }
+      } catch (e) {
+        toast(e.message, { error: true, ms: 8000 });
+      } finally {
+        activeOps.delete(opId);
+        draw();
+      }
     },
   });
   setTimeout(() => document.querySelector('.modal-foot .primary')?.classList.add('danger-primary'), 0);

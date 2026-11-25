@@ -176,6 +176,19 @@ class RemoteFiles {
     await this.run(`mkdir -- ${shq(posixJoin(dir, name))}`);
   }
 
+  async write(filePath, content) {
+    if (!filePath || typeof filePath !== 'string') throw new Error('File path is missing');
+    if (typeof content !== 'string') throw new Error('File content must be text');
+    const buf = Buffer.from(content, 'utf8');
+    const tmp = `${filePath}.termclaw-edit`;
+    const { Readable } = require('stream');
+    await this.run(
+      `cat > ${shq(tmp)} && ( [ -e ${shq(filePath)} ] && cat ${shq(tmp)} > ${shq(filePath)} && rm -f ${shq(tmp)} || mv -f ${shq(tmp)} ${shq(filePath)} ) || { rm -f ${shq(tmp)}; exit 1; }`,
+      { stdin: Readable.from([buf]), timeout: 60000 },
+    );
+    return { path: filePath, size: buf.length };
+  }
+
   // Upload local files/folders into dir. onProgress(bytesDone, bytesTotal).
   async upload(localPaths, dir, { onProgress } = {}) {
     const total = localPaths.reduce((s, p) => s + localSize(p), 0);
@@ -292,6 +305,14 @@ class LocalFiles {
   async mkdir(dir, name) {
     if (!validName(name) || /[\\]/.test(name)) throw new Error('Invalid folder name');
     fs.mkdirSync(path.join(dir, name));
+  }
+
+  async write(filePath, content) {
+    if (!filePath || typeof filePath !== 'string') throw new Error('File path is missing');
+    if (typeof content !== 'string') throw new Error('File content must be text');
+    const p = this._resolve(filePath);
+    fs.writeFileSync(p, content, 'utf8');
+    return { path: p, size: Buffer.byteLength(content, 'utf8') };
   }
 
   async upload(localPaths, dir) {

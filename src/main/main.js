@@ -17,7 +17,6 @@ const { AuditLog } = require('./audit');
 const { McpService } = require('./mcp');
 const { OrchestratorManager } = require('./orchestrators');
 const { ScheduleManager } = require('./schedules');
-const { UsageManager } = require('./usage');
 const { filesFor, LocalFiles } = require('./files');
 const { findOpencode } = require('./opencode');
 const { AgentSetup } = require('./coding-agents/deploy');
@@ -45,7 +44,7 @@ if (!process.env.TERMCLAW_USER_DATA && !app.requestSingleInstanceLock()) {
 }
 
 let win = null;
-let store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules, usage;
+let store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules;
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send('event', { channel, payload });
@@ -96,7 +95,6 @@ function setup() {
   mcp = new McpService({ store, sessions, hosts, audit });
   orchestrators = new OrchestratorManager({ store, sessions, mcp, audit, dataDir, notify: (t, b) => notify(t, b) });
   schedules = new ScheduleManager({ store, sessions, orchestrators, audit, notify: (t, b) => notify(t, b, () => send('show-view', { view: 'sched' })) });
-  usage = new UsageManager({ store, audit });
 
   sessions.on('data', (s, d) => queueData(s.id, d));
   sessions.on('opened', (s) => send('session:opened', s.info()));
@@ -436,11 +434,6 @@ const api = {
   schedRun: (id) => schedules.run(id, { manual: true }),
   schedPreview: (cron) => schedules.preview(cron),
 
-  // usage limits of the coding agents on the project's machine
-  usageGet: (projectId, force) => usage.get(projectId, { force: !!force }),
-  usageClaudeOn: (projectId) => usage.installClaude(projectId),
-  usageClaudeOff: (projectId) => usage.removeClaude(projectId),
-
   // settings, import/export
   updateSettings: async (patch) => {
     // Only listener changes need a restart; permissions and OAuth settings are read per request.
@@ -494,6 +487,7 @@ const api = {
   // files on the project's machine (file explorer, drag & drop onto a terminal)
   filesList: (projectId, dir) => projectFiles(projectId).list(dir),
   filesRead: (projectId, filePath) => projectFiles(projectId).read(filePath),
+  filesWrite: (projectId, filePath, content) => projectFiles(projectId).write(filePath, content),
   // Where a file dropped onto this terminal goes: the shell's current directory.
   filesDropTarget: async (sessionId) => {
     const s = sessions.get(sessionId);

@@ -10,7 +10,6 @@ import * as docker from './docker.js';
 import * as monitor from './monitor.js';
 import * as git from './git.js';
 import * as schedules from './schedules.js';
-import * as usage from './usage.js';
 import { hostLocalShells } from './host-shells.js';
 
 const call = (m, ...a) => window.termclaw.call(m, ...a);
@@ -47,12 +46,14 @@ const hostsProject = () => ({ id: HOSTS_PROJECT_ID, name: 'Hosts', type: 'local'
 export const project = (id) => (id === HOSTS_PROJECT_ID ? hostsProject() : S.config.projects.find((p) => p.id === id));
 export const projectSessions = (pid) => [...S.sessions.values()].filter((s) => s.projectId === pid);
 const mode = (p) => (p && p.layout && p.layout.mode) || 'tabs';
-// Extra tabs of a project, before its sessions. Each module has mount(ctx, el, projectId) and unmount().
-const GIT_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4.5" cy="3.2" r="1.7"/><circle cx="4.5" cy="12.8" r="1.7"/><circle cx="11.5" cy="5.2" r="1.7"/><path d="M4.5 4.9v6.2M11.5 6.9c0 3.2-7 2.2-7 4.2"/></svg>';
+// Project tool tabs (Files, Git, Docker, Monitor), shown before sessions when open. Each module has mount(ctx, el, projectId) and unmount().
+const FILES_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.5a1.5 1.5 0 0 1 1.5-1.5h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>';
+const GIT_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="4.5" cy="3.2" r="1.7"/><circle cx="4.5" cy="12.8" r="1.7"/><circle cx="11.5" cy="5.2" r="1.7"/><path d="M4.5 4.9v6.2M11.5 6.9c0 3.2-7 2.2-7 4.2"/></svg>';
 const EXTRAS = [
+  { key: 'files', label: 'Files', glyph: () => h('span', { class: 'tool-glyph', html: FILES_SVG }), title: 'File explorer: browse, preview, upload and download files', on: (p) => !(p.type === 'ssh' && p.remoteOs === 'windows'), mod: files },
+  { key: 'git', label: 'Git', glyph: (p) => h('span', { class: gitGlyphClass(p.id), 'data-git-glyph': p.id, title: gitTitle(p.id), html: GIT_SVG }), title: 'Git repositories: changes, commit, push and pull, branches, history', on: (p) => !!(p.git && p.git.enabled), mod: git },
   { key: 'docker', label: 'Docker', glyph: () => '🐳', title: 'Docker containers, images and volumes', on: (p) => !!(p.docker && p.docker.enabled), mod: docker },
   { key: 'monitor', label: 'Monitor', glyph: () => '📈', title: 'CPU, memory, disk and network I/O, mounts and programs of the machine', on: (p) => !!(p.monitor && p.monitor.enabled), mod: monitor },
-  { key: 'git', label: 'Git', glyph: (p) => h('span', { class: gitGlyphClass(p.id), 'data-git-glyph': p.id, title: gitTitle(p.id), html: GIT_SVG }), title: 'Git repositories: changes, commit, push and pull, branches, history', on: (p) => !!(p.git && p.git.enabled), mod: git },
 ];
 // Git icon: green when every repository is clean, orange-red only when there are uncommitted changes, neutral gray when unknown.
 const gitState = new Map(); // projectId -> { clean: true|false|null, dirtyRepos: string[], totalChanges: number }
@@ -85,14 +86,56 @@ async function pollGitSummaries() {
     try { const r = await call('gitRepos', p.id, false); setGitSummary(p.id, git.summarizeRepos(r.repos)); } catch { gitState.delete(p.id); }
   }
 }
-const extrasOn = (p) => (p ? EXTRAS.filter((x) => x.on(p)) : []);
-// The extra tab that is shown: the chosen one, or the first one when the project has no session.
+const extrasAvailable = (p) => (p && p.id !== HOSTS_PROJECT_ID ? EXTRAS.filter((x) => x.on(p)) : []);
+const openToolKeys = (p) => (p && p.layout && Array.isArray(p.layout.openTools) ? p.layout.openTools : []);
+const extrasOn = (p) => {
+  const keys = openToolKeys(p);
+  return extrasAvailable(p).filter((x) => keys.includes(x.key));
+};
+// The open tool tab that is shown: the chosen one, or the first open tool when the project has no session.
 function activeExtra(p) {
   const on = extrasOn(p);
   return on.find((x) => x.key === S.active[p.id]) || (!projectSessions(p.id).length ? on[0] : null) || null;
 }
-function showExtra(pid, key) { S.projectId = pid; S.view = 'project'; S.active[pid] = key; render(); }
-function showFiles(pid) { S.projectId = pid; S.view = 'project'; S.active[pid] = 'files'; render(); }
+function showExtra(pid, key) {
+  const p = project(pid);
+  if (p && pid !== HOSTS_PROJECT_ID) {
+    const keys = openToolKeys(p);
+    const openTools = keys.includes(key) ? keys : [...keys, key];
+    p.layout = { ...(p.layout || {}), openTools, active: 'tool:' + key };
+    call('setLayout', pid, { openTools, active: 'tool:' + key });
+  }
+  S.projectId = pid;
+  S.view = 'project';
+  S.active[pid] = key;
+  render();
+}
+function closeExtra(pid, key) {
+  const p = project(pid);
+  if (pid === HOSTS_PROJECT_ID) {
+    if (S.active[pid] === key) delete S.active[pid];
+    render();
+    focusActive();
+    return;
+  }
+  if (!p) return;
+  const openTools = openToolKeys(p).filter((k) => k !== key);
+  const wasActive = S.active[pid] === key;
+  let nextActive = p.layout && p.layout.active;
+  if (wasActive) {
+    delete S.active[pid];
+    const nextTool = extrasAvailable(p).find((x) => openTools.includes(x.key));
+    const list = projectSessions(pid);
+    if (list.length) { S.active[pid] = list[0].id; nextActive = list[0].name; }
+    else if (nextTool) { S.active[pid] = nextTool.key; nextActive = 'tool:' + nextTool.key; }
+    else nextActive = null;
+  }
+  p.layout = { ...(p.layout || {}), openTools, active: nextActive };
+  call('setLayout', pid, { openTools, active: nextActive });
+  render();
+  focusActive();
+}
+function showFiles(pid) { showExtra(pid, 'files'); }
 
 function projectStatus(pid) {
   const all = projectSessions(pid);
@@ -402,8 +445,13 @@ function renderSidebar() {
       const children = h('div', { class: 'proj-children' });
       if (list.length || extrasOn(p).length) node.appendChild(children);
       for (const x of extrasOn(p)) {
-        children.appendChild(h('div', { class: 'sess dk-sess' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) },
-          h('span', { class: 'dk-sess-icon' }, x.glyph(p)), h('span', { class: 'sess-name' }, x.label)));
+        children.appendChild(h('div', {
+          class: 'sess dk-sess' + (ax === x ? ' active' : ''),
+          title: x.title,
+          onclick: () => showExtra(p.id, x.key),
+          onauxclick: (e) => { if (e.button === 1) closeExtra(p.id, x.key); },
+          oncontextmenu: (e) => { e.preventDefault(); contextMenu(e.clientX, e.clientY, [{ label: `Close ${x.label}`, action: () => closeExtra(p.id, x.key) }]); },
+        }, h('span', { class: 'dk-sess-icon' }, x.glyph(p)), h('span', { class: 'sess-name' }, x.label)));
       }
       for (const s of list) {
         const isActive = selected && activeSessionId(p.id) === s.id;
@@ -497,8 +545,7 @@ function projectMenu(e, p) {
     { label: 'Start all terminals', action: () => startAll(p.id) },
     ...(anyConnected(p.id) ? [{ label: 'Disconnect all sessions', action: () => call('disconnectProject', p.id) }] : []),
     ...(anyStopped(p.id) ? [{ label: 'Reconnect all sessions', action: () => call('reconnectProject', p.id) }] : []),
-    { label: 'Browse files…', action: () => files.openBrowser(ctx, p.id) },
-    ...extrasOn(p).map((x) => ({ label: x.label, action: () => showExtra(p.id, x.key) })),
+    ...extrasAvailable(p).map((x) => ({ label: openToolKeys(p).includes(x.key) ? `✓ ${x.label}` : x.label, action: () => showExtra(p.id, x.key) })),
     '-',
     { label: 'Tile view', action: () => { S.projectId = p.id; S.view = 'project'; setMode(p, 'tiles'); } },
     { label: 'Edit…', action: () => pages.editProject(ctx, p) },
@@ -621,7 +668,6 @@ function renderMain() {
   extraShown = null;
   renderMainView();
   for (const x of EXTRAS) if (x.key !== extraShown) x.mod.unmount();
-  if (extraShown !== 'files') files.unmount();
   const t = focused && terms.get(focused.dataset.sid);
   if (t && t.el.isConnected) t.focus();
 }
@@ -665,14 +711,22 @@ function renderProject(main) {
   const list = projectSessions(p.id);
   const host = p.hostId ? S.config.hosts.find((x) => x.id === p.hostId) : null;
   const m = mode(p);
-  const showFilesTab = S.active[p.id] === 'files' && !(p.type === 'ssh' && p.remoteOs === 'windows');
-  const ax = showFilesTab ? { key: 'files', mod: files } : (isHosts ? null : activeExtra(p));
+  const openTools = isHosts ? [] : extrasOn(p);
+  const availTools = isHosts ? [] : extrasAvailable(p);
+  const showHostFiles = isHosts && S.active[p.id] === 'files';
+  const ax = showHostFiles ? { key: 'files', mod: files } : (isHosts ? null : activeExtra(p));
   // One bar: the tabs on the left, the project's actions on the right. Without tabs (tiles, no sessions) the project name takes their place.
-  const showTabs = (list.length || (!isHosts && extrasOn(p).length)) && !(m === 'tiles' && list.length > 1 && !ax);
+  const showTabs = (list.length || openTools.length) && !(m === 'tiles' && list.length > 1 && !ax);
   const aid = ax ? null : activeSessionId(p.id);
   main.appendChild(h('div', { class: 'main-head proj-bar' },
     showTabs ? h('div', { class: 'tabs', onwheel: (e) => { e.currentTarget.scrollLeft += e.deltaY; } },
-      isHosts ? null : extrasOn(p).map((x) => h('div', { class: 'tab dk-tab' + (ax === x ? ' active' : ''), title: x.title, onclick: () => showExtra(p.id, x.key) }, h('span', { style: { fontSize: '12px' } }, x.glyph(p)), x.label)),
+      openTools.map((x) => h('div', {
+        class: 'tab dk-tab' + (ax === x ? ' active' : ''),
+        title: x.title,
+        onclick: () => showExtra(p.id, x.key),
+        onauxclick: (e) => { if (e.button === 1) closeExtra(p.id, x.key); },
+        oncontextmenu: (e) => { e.preventDefault(); contextMenu(e.clientX, e.clientY, [{ label: `Close ${x.label}`, action: () => closeExtra(p.id, x.key) }]); },
+      }, h('span', { style: { fontSize: '12px' } }, x.glyph(p)), x.label, h('span', { class: 'x', title: `Close ${x.label}`, onclick: (e) => { e.stopPropagation(); closeExtra(p.id, x.key); } }, '×'))),
       list.map((s) => h('div', {
         class: 'tab' + (s.id === aid ? ' active' : ''),
         onclick: () => selectSession(s.id),
@@ -695,16 +749,33 @@ function renderProject(main) {
       ],
     h('div', { class: 'spacer' }),
     isHosts ? null : forwardInfo(p),
-    isHosts ? null : usage.chip(ctx, p),
+    availTools.length ? h('div', { class: 'tool-strip' }, availTools.map((x) => {
+      const isOpen = openTools.includes(x);
+      const isAct = ax === x;
+      return h('button', {
+        class: (isAct ? 'active' : '') + (isOpen ? ' open' : ''),
+        title: isOpen ? `${x.label} (open)` : `Open ${x.label} — ${x.title}`,
+        'aria-label': x.label,
+        onclick: () => {
+          if (x.key === 'files') {
+            const sid = activeSessionId(p.id);
+            const s = !isOpen && sid ? S.sessions.get(sid) : null;
+            if (s) browseFrom(s); else files.openBrowser(ctx, p.id);
+          } else showExtra(p.id, x.key);
+        },
+      }, x.glyph(p));
+    })) : null,
+    isHosts ? h('button', {
+      class: showHostFiles ? 'active' : '',
+      title: 'Browse files for the active terminal',
+      disabled: !aid && !showHostFiles,
+      onclick: () => {
+        if (showHostFiles) closeExtra(p.id, 'files');
+        else { const sid = activeSessionId(p.id); const s = sid ? S.sessions.get(sid) : null; if (s) browseFrom(s); }
+      },
+    }, 'Files') : null,
     h('button', { class: m === 'tabs' ? 'active' : '', onclick: () => setMode(p, 'tabs') }, 'Tabs'),
     h('button', { class: m === 'tiles' ? 'active' : '', onclick: () => setMode(p, 'tiles'), title: 'Tile view (Ctrl+Shift+G)' }, 'Tiles'),
-    h('button', {
-      class: showFilesTab ? 'active' : '',
-      title: isHosts ? 'Browse files for the active terminal' : 'File explorer: browse, preview, upload and download files (or drop files onto a terminal)',
-      disabled: isHosts && !aid && !showFilesTab,
-      onclick: () => { const sid = activeSessionId(p.id); const s = !showFilesTab && sid ? S.sessions.get(sid) : null; if (s) browseFrom(s); else if (!isHosts) files.openBrowser(ctx, p.id); },
-    }, 'Files'),
-    showTabs || isHosts ? null : extrasOn(p).map((x) => h('button', { title: x.title, onclick: () => showExtra(p.id, x.key) }, x.label)),
     isHosts ? null : h('button', { title: 'Install coding agents, deploy MCP servers and skills', onclick: (e) => agents.agentsMenu(ctx, e, p, activeSessionId(p.id)) }, 'Agents ▾'),
     (p.terminals || []).length || list.length ? h('button', { class: 'icon', title: 'More actions', onclick: (e) => projectActionsMenu(e, p) }, '⋯') : null,
     isHosts ? null : h('button', { class: 'icon', title: 'Edit project', onclick: () => pages.editProject(ctx, p) }, '⚙')));
@@ -917,7 +988,12 @@ function handleShortcut(e) {
   }
   if (e.shiftKey && e.code === 'KeyG') { if (p) { S.view = 'project'; setMode(p, mode(p) === 'tiles' ? 'tabs' : 'tiles'); } return true; }
   if (e.shiftKey && e.code === 'KeyO') { showView(S.view === 'overview' ? 'project' : 'overview'); return true; }
-  if (e.shiftKey && e.code === 'KeyW') { const id = activeSessionId(); if (id) closeSession(id); return true; }
+  if (e.shiftKey && e.code === 'KeyW') {
+    const ax = p && p.id !== HOSTS_PROJECT_ID ? activeExtra(p) : null;
+    if (ax) closeExtra(p.id, ax.key);
+    else { const id = activeSessionId(); if (id) closeSession(id); }
+    return true;
+  }
   if (e.code === 'Tab') {
     const list = p ? projectSessions(p.id) : [];
     if (list.length) {
@@ -1051,8 +1127,6 @@ export const ctx = { S, call, render, renderSoon, showView, showExtra, showFiles
   call('localShells').then((l) => { S.localShells = l; }).catch(() => {});
   setTimeout(pollGitSummaries, 2000);
   setInterval(pollGitSummaries, 60000);
-  // Usage limits of the project in view, read again every two minutes while the window is visible.
-  setInterval(() => { if (S.view === 'project' && !document.hidden) usage.refresh(ctx, S.projectId); }, 30000);
   S.hosts = st.hosts;
   S.forwards = st.forwards;
   S.mcp = st.mcp;
@@ -1076,9 +1150,13 @@ export const ctx = { S, call, render, renderSoon, showView, showExtra, showFiles
       call('agentMessages', info.id).then((m) => { S.agentMessages.set(info.id, m || []); renderChatLog(ctx, info.id); });
     }
   }
-  // Restore the active session per project (and standalone host sessions) from the saved layout.
+  // Restore the active session or open tool tab per project (and standalone host sessions) from the saved layout.
   for (const p of [hostsProject(), ...S.config.projects]) {
     const name = p.layout && p.layout.active;
+    if (name && name.startsWith('tool:')) {
+      const key = name.slice(5);
+      if (openToolKeys(p).includes(key)) { S.active[p.id] = key; continue; }
+    }
     const s = name && [...S.sessions.values()].find((x) => x.projectId === p.id && x.name === name);
     if (s) S.active[p.id] = s.id;
   }
