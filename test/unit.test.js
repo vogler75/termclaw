@@ -537,3 +537,280 @@ test('standalone host sessions: local shell opens, spawns, persists and restores
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('OpenCode v2: simplifyMessages keeps reasoning, diffs, compaction and computeUsage sums tokens and context', () => {
+  const { simplifyMessages, computeUsage } = require('../src/main/opencode');
+  const raw = [
+    {
+      id: 'm2',
+      type: 'assistant',
+      time: { created: 200, completed: 250 },
+      cost: 0.015,
+      tokens: { input: 2000, output: 300, reasoning: 400, cache: { read: 5000, write: 100 } },
+      content: [
+        { type: 'reasoning', text: 'Check the handler first.' },
+        {
+          type: 'tool',
+          id: 'c1',
+          name: 'edit',
+          time: { created: 205, ran: 210, completed: 230 },
+          state: {
+            status: 'completed',
+            input: { filePath: 'src/a.js' },
+            metadata: { diff: '@@ -1 +1 @@\n-old\n+new\n' },
+            content: [{ text: 'Edited src/a.js' }],
+          },
+        },
+        { type: 'text', text: 'Done.' },
+      ],
+    },
+    { id: 'm1', type: 'user', text: 'Fix a.js', time: { created: 100 } },
+    { id: 'm3', type: 'compaction', status: 'completed', summary: 'Earlier turns summarized.', time: { created: 300 } },
+  ];
+
+  const simple = simplifyMessages(raw);
+  assert.deepStrictEqual(simple.map((m) => m.id), ['m1', 'm2', 'm3']);
+  assert.strictEqual(simple[1].thought, 'Check the handler first.');
+  assert.strictEqual(simple[1].tools[0].diffs[0].path, 'src/a.js');
+  assert.match(simple[1].tools[0].diffs[0].unified, /\+new/);
+  assert.strictEqual(simple[1].tools[0].startedAt, 210);
+  assert.strictEqual(simple[1].tools[0].completedAt, 230);
+  assert.strictEqual(simple[2].compaction, true);
+
+  const usage = computeUsage(raw, null, 200000);
+  assert.deepStrictEqual(usage, {
+    used: 7800,
+    size: 200000,
+    inputTokens: 2000,
+    outputTokens: 300,
+    reasoningTokens: 400,
+    cacheReadTokens: 5000,
+    cacheWriteTokens: 100,
+    totalTokens: 7800,
+    turns: 1,
+    cost: { amount: 0.015, currency: 'USD' },
+  });
+});
+
+test('OpenCode AgentSession: live activity, reasoning, tools, usage, permissions, questions and todos over SSE', async () => {
+  const { EventEmitter } = require('events');
+  const { AgentSession } = require('../src/main/agent');
+  const mgr = new EventEmitter();
+  mgr.store = { getProject: () => ({ id: 'p', name: 'p', type: 'local' }), getHost: () => null, settings: {} };
+  mgr.persistOpen = () => {};
+
+  const repliedPerms = [];
+  const repliedQuestions = [];
+  const s = new AgentSession(mgr, { id: 'p', name: 'p', type: 'local' }, { name: 'oc', disconnected: true });
+  s.agentSessionId = 'ses_1';
+  s.contextLimit = 128000;
+  s.client = {
+    url: 'http://127.0.0.1:9999',
+    close() {},
+    messages: async () => [],
+    getSession: async () => ({ id: 'ses_1', title: 'Bugfix' }),
+    replyPermission: async (_sid, reqId, reply) => { repliedPerms.push([reqId, reply]); },
+    replyQuestion: async (_sid, reqId, answers) => { repliedQuestions.push([reqId, answers]); },
+    rejectQuestion: async () => {},
+  };
+
+  let lastLive = null;
+  mgr.on('agent-live', (_s, live) => { lastLive = live; });
+
+  s._onEvent({ type: 'session.execution.started', data: { sessionID: 'ses_1' } });
+  assert.strictEqual(s.status, 'working');
+  assert.strictEqual(s.activity.phase, 'thinking');
+
+  s._onEvent({ type: 'session.reasoning.delta', data: { sessionID: 'ses_1', delta: 'Thinking hard' } });
+  s._emitLive(true);
+  assert.strictEqual(s.activity.phase, 'reasoning');
+  assert.strictEqual(lastLive.thought, 'Thinking hard');
+
+  s._onEvent({ type: 'session.tool.called', data: { sessionID: 'ses_1', callID: 't1', name: 'bash', input: { command: 'npm test' } } });
+  assert.strictEqual(s.activity.phase, 'tool');
+  assert.match(s.activity.detail, /Running bash: npm test/);
+  assert.strictEqual(lastLive.tools[0].status, 'running');
+
+  s._onEvent({ type: 'session.tool.success', data: { sessionID: 'ses_1', callID: 't1', content: [{ text: 'ok' }], metadata: { diff: '@@ -1 +1 @@\n-a\n+b\n' } } });
+  assert.strictEqual(lastLive.tools[0].status, 'completed');
+  assert.strictEqual(lastLive.tools[0].diffs.length, 1);
+
+  s._onEvent({ type: 'session.step.ended', data: { sessionID: 'ses_1', cost: 0.02, tokens: { input: 1000, output: 200, reasoning: 50, cache: { read: 500, write: 0 } } } });
+  assert.strictEqual(s.info().usage.totalTokens, 1750);
+  assert.strictEqual(s.info().usage.size, 128000);
+  assert.strictEqual(s.info().usage.cost.amount, 0.02);
+
+  s._onEvent({ type: 'todo.updated', properties: { sessionID: 'ses_1', todos: [{ content: 'Run tests', status: 'in_progress' }] } });
+  assert.deepStrictEqual(s.info().plan, [{ content: 'Run tests', status: 'in_progress', priority: '' }]);
+
+  s._onEvent({ type: 'permission.v2.asked', data: { id: 'perm_1', sessionID: 'ses_1', action: 'bash', resources: ['rm -rf tmp'] } });
+  assert.strictEqual(s.info().permission.id, 'perm_1');
+  assert.strictEqual(s.activity.phase, 'permission');
+  await s.answerPermission('once');
+  assert.deepStrictEqual(repliedPerms, [['perm_1', 'once']]);
+  assert.strictEqual(s.info().permission, null);
+
+  s._onEvent({ type: 'question.v2.asked', data: { id: 'q_1', sessionID: 'ses_1', questions: [{ header: 'Choice', question: 'Pick one', options: [{ label: 'A', description: 'Option A' }] }] } });
+  assert.strictEqual(s.info().question.id, 'q_1');
+  await s.answerQuestion([['A']]);
+  assert.deepStrictEqual(repliedQuestions, [['q_1', [['A']]]]);
+  assert.strictEqual(s.info().question, null);
+
+  s._onEvent({ type: 'session.retry.scheduled', data: { sessionID: 'ses_1', attempt: 2, at: Date.now() + 5000, error: { message: 'rate limited' } } });
+  assert.strictEqual(s.activity.phase, 'retry');
+  assert.strictEqual(s.activity.attempt, 2);
+
+  s._onEvent({ type: 'session.execution.succeeded', data: { sessionID: 'ses_1' } });
+  assert.strictEqual(s.status, 'waiting');
+  assert.strictEqual(s.activity, null);
+  s.close();
+});
+
+test('git: parseRemoteWeb handles GitHub, self-hosted GitLab subgroups, and Bitbucket; summarizeChecks counts statuses', () => {
+  const { parseRemoteWeb, summarizeChecks } = require('../src/main/git');
+
+  const gh = parseRemoteWeb('git@github.com:vogler75/termclaw.git');
+  assert.strictEqual(gh.provider, 'github');
+  assert.strictEqual(gh.prLabel, 'PR');
+  assert.strictEqual(gh.repoUrl, 'https://github.com/vogler75/termclaw');
+  assert.strictEqual(gh.branchUrl('feat/files'), 'https://github.com/vogler75/termclaw/tree/feat/files');
+  assert.strictEqual(gh.commitUrl('abc123'), 'https://github.com/vogler75/termclaw/commit/abc123');
+  assert.strictEqual(gh.newPrUrl('feat/files'), 'https://github.com/vogler75/termclaw/compare/feat/files?expand=1');
+
+  const gl = parseRemoteWeb('git@code.siemens.com:tf_scada_hmi/sub/winccoa-try-out.git');
+  assert.strictEqual(gl.provider, 'gitlab');
+  assert.strictEqual(gl.label, 'GitLab');
+  assert.strictEqual(gl.prLabel, 'MR');
+  assert.strictEqual(gl.repoUrl, 'https://code.siemens.com/tf_scada_hmi/sub/winccoa-try-out');
+  assert.strictEqual(gl.commitUrl('deadbeef'), 'https://code.siemens.com/tf_scada_hmi/sub/winccoa-try-out/-/commit/deadbeef');
+  assert.match(gl.newPrUrl('fix/1'), /-\/merge_requests\/new\?merge_request%5Bsource_branch%5D=fix%2F1$/);
+
+  const bb = parseRemoteWeb('https://bitbucket.org/team/app.git');
+  assert.strictEqual(bb.provider, 'bitbucket');
+  assert.strictEqual(bb.branchUrl('dev'), 'https://bitbucket.org/team/app/src/dev');
+
+  assert.strictEqual(parseRemoteWeb('/local/bare/repo.git'), null);
+
+  assert.deepStrictEqual(summarizeChecks([
+    { conclusion: 'SUCCESS' },
+    { conclusion: 'FAILURE' },
+    { status: 'IN_PROGRESS' },
+  ]), { total: 3, passed: 1, failed: 1, pending: 1 });
+});
+
+test('git: stash push/show/pop, amend, rename/merge branch and initial-commit discard in a real repo', async () => {
+  const { execFileSync } = require('child_process');
+  const { GitManager } = require('../src/main/git');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-git2-'));
+  const repo = path.join(root, 'r');
+  fs.mkdirSync(repo);
+  const g = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' });
+  g('init', '-b', 'main');
+  g('config', 'user.email', 't@example.com');
+  g('config', 'user.name', 'Tester');
+  g('remote', 'add', 'origin', 'git@code.siemens.com:tf_scada_hmi/winccoa-try-out.git');
+
+  const proj = { id: 'p', name: 'p', type: 'local', directory: root, git: { enabled: true, paths: '', depth: 2 } };
+  const mgr = new GitManager({ getProject: () => proj, getHost: () => null });
+  const real = fs.realpathSync(repo);
+
+  try {
+    // Discard staged file on initial commit (no HEAD yet)
+    fs.writeFileSync(path.join(repo, 'temp.txt'), 'tmp');
+    g('add', 'temp.txt');
+    let st = await mgr.state('p', real);
+    assert.strictEqual(st.branch.initial, true);
+    assert.strictEqual(st.web.provider, 'gitlab');
+    await mgr.discard('p', real, st.files, { initial: true });
+    assert.strictEqual(fs.existsSync(path.join(repo, 'temp.txt')), false);
+
+    // Initial commit + amend
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+    await mgr.commit('p', real, { all: true, summary: 'first commit' });
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'one-amended\n');
+    await mgr.commit('p', real, { all: true, summary: 'first commit amended', amend: true });
+    st = await mgr.state('p', real);
+    assert.strictEqual(st.log.length, 1);
+    assert.strictEqual(st.log[0].subject, 'first commit amended');
+
+    // Stash push, show, pop
+    fs.writeFileSync(path.join(repo, 'a.txt'), 'wip\n');
+    await mgr.stashPush('p', real, { message: 'work in progress' });
+    st = await mgr.state('p', real);
+    assert.strictEqual(st.files.length, 0);
+    assert.strictEqual(st.stashes, 1);
+    assert.match(st.stashList[0].message, /work in progress/);
+    const show = await mgr.stashShow('p', real, 'stash@{0}');
+    assert.match(show.diff, /\+wip/);
+    await mgr.stashApply('p', real, { ref: 'stash@{0}', pop: true });
+    st = await mgr.state('p', real);
+    assert.strictEqual(st.stashes, 0);
+    assert.strictEqual(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'wip\n');
+    await mgr.commit('p', real, { all: true, summary: 'save wip' });
+
+    // Branch create, rename, commit, checkout main, merge
+    await mgr.createBranch('p', real, 'feat-old');
+    await mgr.renameBranch('p', real, { oldName: 'feat-old', newName: 'feat-new' });
+    fs.writeFileSync(path.join(repo, 'b.txt'), 'from branch\n');
+    await mgr.commit('p', real, { all: true, summary: 'add b' });
+    await mgr.checkout('p', real, { name: 'main' });
+    await mgr.mergeBranch('p', real, 'feat-new');
+    assert.strictEqual(fs.readFileSync(path.join(repo, 'b.txt'), 'utf8'), 'from branch\n');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('store: sortProjectsByName sorts projects persistently and keeps new/renamed projects sorted', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-sortproj-'));
+  const st = new Store(dir);
+  try {
+    st.saveProject({ name: 'Zeta' });
+    st.saveProject({ name: 'alpha' });
+    st.saveProject({ name: 'Mid' });
+    assert.deepStrictEqual(st.data.projects.map((p) => p.name), ['Zeta', 'alpha', 'Mid']);
+
+    st.setSortProjectsByName(true);
+    assert.deepStrictEqual(st.data.projects.map((p) => p.name), ['alpha', 'Mid', 'Zeta']);
+    st.saveProject({ name: 'Beta' });
+    assert.deepStrictEqual(st.data.projects.map((p) => p.name), ['alpha', 'Beta', 'Mid', 'Zeta']);
+    st.saveNow();
+
+    const st2 = new Store(dir);
+    assert.strictEqual(st2.settings.sortProjectsByName, true);
+    assert.deepStrictEqual(st2.data.projects.map((p) => p.name), ['alpha', 'Beta', 'Mid', 'Zeta']);
+    // Manual move switches back to manual order.
+    st2.moveProject(st2.data.projects[0].id, 1);
+    assert.strictEqual(st2.settings.sortProjectsByName, false);
+    assert.deepStrictEqual(st2.data.projects.map((p) => p.name), ['Beta', 'alpha', 'Mid', 'Zeta']);
+    clearTimeout(st2._timer);
+  } finally {
+    clearTimeout(st._timer);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('sessions: default shell terminals are numbered starting at shell-1', () => {
+  const { SessionManager } = require('../src/main/sessions');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-shellnum-'));
+  const st = new Store(dir);
+  const p = st.saveProject({ name: 'Demo', type: 'local', directory: dir });
+  const mgr = new SessionManager(st);
+  try {
+    const s1 = mgr.open(p.id, { disconnected: true });
+    const s2 = mgr.open(p.id, { disconnected: true });
+    const s3 = mgr.open(p.id, { disconnected: true });
+    assert.deepStrictEqual([s1.name, s2.name, s3.name], ['shell-1', 'shell-2', 'shell-3']);
+    mgr.close(s1.id);
+    const s4 = mgr.open(p.id, { disconnected: true });
+    assert.strictEqual(s4.name, 'shell-1');
+    // Custom session names keep their base name first.
+    const c1 = mgr.open(p.id, { name: 'dev', disconnected: true });
+    const c2 = mgr.open(p.id, { name: 'dev', disconnected: true });
+    assert.deepStrictEqual([c1.name, c2.name], ['dev', 'dev-2']);
+  } finally {
+    mgr.shutdown();
+    clearTimeout(st._timer);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

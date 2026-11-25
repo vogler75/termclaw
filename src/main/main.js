@@ -108,6 +108,7 @@ function setup() {
   sessions.on('agent-live', (s, text) => send('agent:live', { id: s.id, text }));
   sessions.on('agent-log', (s, line) => send('agent:log', { id: s.id, line }));
   sessions.on('agent-permission', (s, permission) => send('agent:permission', { id: s.id, permission }));
+  sessions.on('agent-question', (s, question) => send('agent:question', { id: s.id, question }));
   sessions.on('status', (s, prev, reason) => {
     send('session:status', { id: s.id, status: s.status, prev, reason, lastOutputAt: s.lastOutputAt });
     // Notify when an agent switches to "waiting", but not for the first prompt of a fresh shell.
@@ -240,17 +241,30 @@ const api = {
   gitDiff: (projectId, repo, file) => git.diff(projectId, repo, file),
   gitCommitInfo: (projectId, repo, hash) => git.commitInfo(projectId, repo, hash),
   gitCommitDiff: (projectId, repo, hash, file) => git.commitDiff(projectId, repo, hash, file),
+  gitStashShow: (projectId, repo, ref) => git.stashShow(projectId, repo, ref),
+  gitPrStatus: (projectId, repo) => git.prStatus(projectId, repo),
+  gitPrList: (projectId, repo) => git.prList(projectId, repo),
   gitAction: async (projectId, repo, action, args = {}) => {
     const p = store.getProject(projectId);
     const run = {
       commit: () => git.commit(projectId, repo, args),
-      push: () => git.push(projectId, repo),
-      pull: () => git.pull(projectId, repo),
+      push: () => git.push(projectId, repo, args),
+      pull: () => git.pull(projectId, repo, args),
       fetch: () => git.fetch(projectId, repo),
-      discard: () => git.discard(projectId, repo, args.files),
+      discard: () => git.discard(projectId, repo, args.files, args),
       checkout: () => git.checkout(projectId, repo, args),
       createBranch: () => git.createBranch(projectId, repo, args.name),
       deleteBranch: () => git.deleteBranch(projectId, repo, args.name, args),
+      mergeBranch: () => git.mergeBranch(projectId, repo, args.name),
+      rebaseBranch: () => git.rebaseBranch(projectId, repo, args.name),
+      renameBranch: () => git.renameBranch(projectId, repo, args),
+      stashPush: () => git.stashPush(projectId, repo, args),
+      stashApply: () => git.stashApply(projectId, repo, args),
+      stashDrop: () => git.stashDrop(projectId, repo, args),
+      resolveConflict: () => git.resolveConflict(projectId, repo, args),
+      continueOp: () => git.continueOp(projectId, repo, args.op),
+      abortOp: () => git.abortOp(projectId, repo, args.op),
+      prCheckout: () => git.prCheckout(projectId, repo, args.number),
       undoCommit: () => git.undoCommit(projectId, repo),
       revertCommit: () => git.revertCommit(projectId, repo, args.hash),
       ignore: () => git.ignore(projectId, repo, args),
@@ -302,6 +316,7 @@ const api = {
   },
   moveProject: (id, delta) => store.moveProject(id, delta),
   moveProjectTo: (id, beforeId) => store.moveProjectTo(id, beforeId),
+  setSortProjectsByName: (on) => store.setSortProjectsByName(on),
   moveSessionTo: (id, beforeId) => sessions.moveSessionTo(id, beforeId),
   moveSession: (id, delta) => sessions.moveSession(id, delta),
   setLayout: (id, layout) => {
@@ -378,9 +393,12 @@ const api = {
   agentInterrupt: (id) => { const s = sessions.get(id); return s && s.interrupt ? s.interrupt() : null; },
   agentRefreshModel: (id) => { const s = sessions.get(id); return s && s.refreshModel ? s.refreshModel() : null; },
   acpAgents: () => Object.entries(ACP_AGENTS).map(([id, a]) => ({ id, name: a.name })),
-  agentSetApproval: (id, policy) => { const s = sessions.get(id); if (!s || !s.setApproval) throw new Error('not an ACP session'); return s.setApproval(policy); },
-  agentSetOption: (id, optionId, value) => { const s = sessions.get(id); if (!s || !s.setAgentOption) throw new Error('not an ACP session'); return s.setAgentOption(optionId, value); },
-  agentPermission: (id, optionId) => { const s = sessions.get(id); if (!s || !s.answerPermission) throw new Error('not an ACP session'); return s.answerPermission(optionId); },
+  agentSetApproval: (id, policy) => { const s = sessions.get(id); if (!s || !s.setApproval) throw new Error('approval policy not supported by this session'); return s.setApproval(policy); },
+  agentSetOption: (id, optionId, value) => { const s = sessions.get(id); if (!s || !s.setAgentOption) throw new Error('options not supported by this session'); return s.setAgentOption(optionId, value); },
+  agentPermission: (id, optionId) => { const s = sessions.get(id); if (!s || !s.answerPermission) throw new Error('permissions not supported by this session'); return s.answerPermission(optionId); },
+  agentQuestionReply: (id, answers) => { const s = sessions.get(id); if (!s || !s.answerQuestion) throw new Error('questions not supported by this session'); return s.answerQuestion(answers); },
+  agentQuestionReject: (id) => { const s = sessions.get(id); if (!s || !s.rejectQuestion) throw new Error('questions not supported by this session'); return s.rejectQuestion(); },
+  agentLog: (id) => { const s = sessions.get(id); return s && s.getLog ? s.getLog() : []; },
   agentSlashCommands: (id) => { const s = sessions.get(id); if (!s || !s.slashCommands) throw new Error('not an agent session'); return s.slashCommands(); },
   agentRunSlash: (id, text) => { const s = sessions.get(id); if (!s || !s.runSlash) throw new Error('not an agent session'); return s.runSlash(text); },
   agentModels: (id) => { const s = sessions.get(id); if (!s || !s.listModels) throw new Error('not an agent session'); return s.listModels(); },
@@ -473,8 +491,9 @@ const api = {
   openExternal: (url) => { if (/^https?:\/\//.test(url)) shell.openExternal(url); },
   showInFolder: (p) => shell.showItemInFolder(String(p)),
 
-  // files on the project's machine (file browser, drag & drop onto a terminal)
+  // files on the project's machine (file explorer, drag & drop onto a terminal)
   filesList: (projectId, dir) => projectFiles(projectId).list(dir),
+  filesRead: (projectId, filePath) => projectFiles(projectId).read(filePath),
   // Where a file dropped onto this terminal goes: the shell's current directory.
   filesDropTarget: async (sessionId) => {
     const s = sessions.get(sessionId);

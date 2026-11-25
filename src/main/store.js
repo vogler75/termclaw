@@ -12,6 +12,7 @@ const DEFAULT_SETTINGS = {
   defaultThresholdSec: 5,
   notifications: true,
   usage: true, // usage limits of Claude Code and Codex in the project bar
+  sortProjectsByName: false, // keep projects in the sidebar sorted alphabetically by name
   menuShells: null, // ids of the local shells in the Session menu; null = the usual ones (connect.js detectLocalShells)
   macOptionMeta: false, // macOS: Option as the Meta key in terminals instead of typing characters (~ @ [ ] |)
   fontSize: 13,
@@ -225,6 +226,7 @@ class Store extends EventEmitter {
     const proj = normalizeProject(stripSecrets(p));
     const i = this.data.projects.findIndex((x) => x.id === proj.id);
     if (i >= 0) this.data.projects[i] = proj; else this.data.projects.push(proj);
+    if (this.data.settings.sortProjectsByName) this._sortProjects();
     this.save();
     return proj;
   }
@@ -232,8 +234,19 @@ class Store extends EventEmitter {
     const p = this.getProject(id);
     if (!p) return null;
     Object.assign(p, patch);
+    if (this.data.settings.sortProjectsByName && 'name' in patch) this._sortProjects();
     this.save();
     return p;
+  }
+  _sortProjects() {
+    this.data.projects.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base', numeric: true }));
+  }
+  setSortProjectsByName(enabled) {
+    const on = !!enabled;
+    this.data.settings.sortProjectsByName = on;
+    if (on) this._sortProjects();
+    this.save();
+    return on;
   }
   deleteProject(id) {
     this.data.projects = this.data.projects.filter((p) => p.id !== id);
@@ -248,6 +261,7 @@ class Store extends EventEmitter {
     const [p] = arr.splice(i, 1);
     const j = beforeId ? arr.findIndex((x) => x.id === beforeId) : -1;
     if (j < 0) arr.push(p); else arr.splice(j, 0, p);
+    this.data.settings.sortProjectsByName = false;
     this.save();
   }
 
@@ -257,6 +271,7 @@ class Store extends EventEmitter {
     if (i < 0 || j < 0 || j >= this.data.projects.length) return;
     const arr = this.data.projects;
     [arr[i], arr[j]] = [arr[j], arr[i]];
+    this.data.settings.sortProjectsByName = false;
     this.save();
   }
 
@@ -334,6 +349,7 @@ class Store extends EventEmitter {
       incoming.credentials = this.data.credentials;
       this.data = incoming;
     }
+    if (this.data.settings.sortProjectsByName) this._sortProjects();
     this.save();
   }
 }

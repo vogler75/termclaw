@@ -5,9 +5,20 @@ const crypto = require('crypto');
 const path = require('path');
 const os = require('os');
 const { BaseSession } = require('./sessions');
-const { OpenCodeClient, LocalOpenCodeServer, findOpencode, freePort, simplifyMessages, messagesToText } = require('./opencode');
+const { OpenCodeClient, LocalOpenCodeServer, findOpencode, freePort, normalizeTokens, computeUsage, simplifyMessages, messagesToText } = require('./opencode');
 const { resolveTarget, sshBaseArgs, sshDest, batchOpts, authEnv, specEnv, projectDir, posixDir, shq, tmuxName, SSH_BIN } = require('./connect');
 const { Target } = require('./coding-agents/target');
+
+const READ_ACTIONS = new Set(['read', 'glob', 'grep', 'list', 'ls', 'find', 'search', 'webfetch', 'websearch', 'fetch', 'think', 'todoread', 'question']);
+
+function toolBrief(input) {
+  if (!input) return '';
+  if (typeof input === 'string') return input.slice(0, 60);
+  for (const k of ['filePath', 'file_path', 'path', 'command', 'cmd', 'pattern', 'query', 'url', 'description']) {
+    if (typeof input[k] === 'string' && input[k]) return input[k].slice(0, 60);
+  }
+  return '';
+}
 
 const SLASH_BUILTINS = [
   { name: 'model', description: 'Choose the model for this session' },
@@ -27,8 +38,21 @@ class AgentSession extends BaseSession {
     this.remotePort = opts.remotePort || 20000 + Math.floor(Math.random() * 30000);
     this.agentSessionId = opts.agentSessionId || null;
     this.chosenModel = opts.model || null; // {providerID, id, variant} picked by the user
+    this.approval = ['ask', 'reads', 'all'].includes(opts.approval) ? opts.approval : 'ask';
     this.messages = [];
     this.live = '';
+    this.liveState = null; // { text, thought, tools: Map, compaction }
+    this.usage = null;
+    this.contextLimit = 0;
+    this.activity = null;
+    this.plan = [];
+    this.title = '';
+    this.agentsList = [];
+    this.activeAgent = '';
+    this.permission = null;
+    this.pendingPermissions = [];
+    this.question = null;
+    this.pendingQuestions = [];
     this.procs = [];
     this.client = null;
     this.server = null;
@@ -37,13 +61,54 @@ class AgentSession extends BaseSession {
   }
 
   _log(line) {
-    this.log.push(line);
+    this.log.push(`${new Date().toLocaleTimeString()} ${line}`);
     if (this.log.length > 200) this.log.shift();
     this.mgr.emit('agent-log', this, line);
   }
 
+  getLog() { return [...this.log]; }
+
+  _setActivity(phase, detail = '', extra = {}) {
+    if (!phase || phase === 'idle') {
+      if (!this.activity) return;
+      this.activity = null;
+      this._emitUpdate(true);
+      return;
+    }
+    const startedAt = this.activity && this.activity.phase !== 'connecting' && phase !== 'connecting'
+      ? this.activity.startedAt
+      : Date.now();
+    this.activity = { phase, detail, startedAt, ...extra };
+    this._emitUpdate();
+  }
+
+  _emitUpdate(now) {
+    if (now) { clearTimeout(this._updTimer); this._updTimer = null; this.mgr.emit('updated', this); return; }
+    if (this._updTimer) return;
+    this._updTimer = setTimeout(() => { this._updTimer = null; this.mgr.emit('updated', this); }, 150);
+  }
+
+  _ensureLive() {
+    if (!this.liveState) this.liveState = { text: '', thought: '', tools: new Map(), compaction: '' };
+    return this.liveState;
+  }
+
+  _emitLive(now) {
+    clearTimeout(this._liveTimer);
+    const fire = () => {
+      const ls = this.liveState;
+      const payload = ls && (ls.text || ls.thought || ls.tools.size || ls.compaction)
+        ? { text: ls.text, thought: ls.thought, tools: [...ls.tools.values()], compaction: ls.compaction }
+        : null;
+      this.live = ls ? ls.text : '';
+      this.mgr.emit('agent-live', this, payload);
+    };
+    if (now) fire(); else this._liveTimer = setTimeout(fire, 80);
+  }
+
   async start() {
     this.setStatus('starting');
+    this._setActivity('connecting', 'Starting OpenCode server…');
     this.error = null;
     try {
       await this._connect();
@@ -64,15 +129,21 @@ class AgentSession extends BaseSession {
           .catch((e) => this._log(`could not apply model ${m.providerID}/${m.id}: ${e.message}`));
       }
       const active = await this.client.active().catch(() => ({}));
-      this.setStatus(active[this.agentSessionId] ? 'working' : 'waiting', 'api');
+      const busy = !!active[this.agentSessionId];
+      this.setStatus(busy ? 'working' : 'waiting', 'api');
+      this._setActivity(busy ? 'thinking' : 'idle', busy ? 'Working…' : '');
+      await this.refreshModel();
+      await this._refreshAgents();
+      await this._syncPending();
       await this.refresh();
       this._log('connected to OpenCode at ' + this.client.url);
-      await this.refreshModel();
     } catch (e) {
       if (this.disconnected) return;
       this.error = e.message;
+      this._setActivity('idle');
       this._log('error: ' + e.message);
       this.setStatus('error', e.message);
+      this._emitUpdate(true);
     }
   }
 
@@ -188,23 +259,434 @@ class AgentSession extends BaseSession {
   }
 
   _onEvent(ev) {
-    const data = ev.data || {};
-    if (data.sessionID !== this.agentSessionId) return;
+    const data = ev.data || ev.properties || {};
+    const sid = data.sessionID || (data.info && data.info.sessionID);
+    if (sid !== this.agentSessionId) return;
     const t = ev.type || '';
     this.lastOutputAt = Date.now();
-    if (t === 'session.execution.started') {
-      this.live = '';
-      this.setStatus('working', 'api');
-    } else if (/^session\.execution\.(succeeded|failed|interrupted)$/.test(t)) {
-      this.live = '';
-      this.setStatus('waiting', t.split('.').pop());
-      this.refresh();
-    } else if (t === 'session.text.delta') {
-      this.live += data.delta || '';
-      this.mgr.emit('agent-live', this, this.live);
-    } else if (t === 'session.step.ended' || t === 'session.inbox.delivered' || t === 'session.tool.ended' || t === 'session.text.ended') {
-      this.refreshSoon();
+    switch (t) {
+      case 'session.execution.started':
+        this.liveState = { text: '', thought: '', tools: new Map(), compaction: '' };
+        this.setStatus('working', 'api');
+        this._setActivity('thinking', 'Waiting for model…');
+        this._emitLive(true);
+        break;
+      case 'session.execution.succeeded':
+      case 'session.execution.failed':
+      case 'session.execution.interrupted':
+        this.liveState = null;
+        this._emitLive(true);
+        if (!this.permission && !this.question) this._setActivity('idle');
+        this.setStatus('waiting', t.split('.').pop());
+        this.refresh();
+        break;
+      case 'session.step.started':
+        this._ensureLive();
+        if (this.status !== 'working' && !this.permission && !this.question) this.setStatus('working', 'step');
+        if (!this.activity || this.activity.phase === 'retry') this._setActivity('thinking', 'Thinking…');
+        break;
+      case 'session.step.ended':
+        this._mergeStepUsage(data.tokens, data.cost, true);
+        this.refreshSoon();
+        break;
+      case 'session.step.failed':
+        this._log('step failed: ' + ((data.error && data.error.message) || 'error'));
+        this.refreshSoon();
+        break;
+      case 'session.reasoning.started':
+        this._ensureLive();
+        this._setActivity('reasoning', 'Reasoning…');
+        this._emitLive();
+        break;
+      case 'session.reasoning.delta':
+        this._ensureLive().thought += data.delta || '';
+        this._setActivity('reasoning', 'Reasoning…');
+        this._emitLive();
+        break;
+      case 'session.reasoning.ended': {
+        const ls = this._ensureLive();
+        if (data.text && !ls.thought) ls.thought = data.text;
+        this._emitLive();
+        this.refreshSoon();
+        break;
+      }
+      case 'session.text.started':
+        this._ensureLive();
+        this._setActivity('responding', 'Writing response…');
+        this._emitLive();
+        break;
+      case 'session.text.delta':
+        this._ensureLive().text += data.delta || '';
+        this._setActivity('responding', 'Writing response…');
+        this._emitLive();
+        break;
+      case 'session.text.ended': {
+        const ls = this._ensureLive();
+        if (data.text && !ls.text) ls.text = data.text;
+        this._emitLive();
+        this.refreshSoon();
+        break;
+      }
+      case 'session.tool.input.started': {
+        const ls = this._ensureLive();
+        const id = data.callID || ('call-' + Date.now());
+        ls.tools.set(id, { id, name: data.name || 'tool', status: 'streaming', input: '', result: '', startedAt: Date.now() });
+        this._setActivity('tool', `Preparing ${data.name || 'tool'}…`);
+        this._emitLive();
+        break;
+      }
+      case 'session.tool.input.delta': {
+        const ls = this._ensureLive();
+        const tool = ls.tools.get(data.callID);
+        if (tool && tool.status === 'streaming') tool.input = (typeof tool.input === 'string' ? tool.input : '') + (data.delta || '');
+        this._emitLive();
+        break;
+      }
+      case 'session.tool.input.ended': {
+        const ls = this._ensureLive();
+        const tool = ls.tools.get(data.callID);
+        if (tool && tool.status === 'streaming' && data.text !== undefined) tool.input = data.text;
+        this._emitLive();
+        break;
+      }
+      case 'session.tool.called': {
+        const ls = this._ensureLive();
+        const id = data.callID || ('call-' + Date.now());
+        const prev = ls.tools.get(id);
+        const name = (prev && prev.name) || data.name || 'tool';
+        const tool = { id, name, status: 'running', input: data.input, result: '', startedAt: Date.now() };
+        ls.tools.set(id, tool);
+        const subj = toolBrief(data.input);
+        this._setActivity('tool', `Running ${name}${subj && !name.includes(subj) ? ': ' + subj : ''}`);
+        this._emitLive(true);
+        break;
+      }
+      case 'session.tool.progress': {
+        const ls = this._ensureLive();
+        const tool = ls.tools.get(data.callID);
+        if (tool && data.metadata && typeof data.metadata.output === 'string') {
+          tool.result = data.metadata.output.slice(-4000);
+          this._emitLive();
+        }
+        break;
+      }
+      case 'session.tool.success': {
+        const ls = this._ensureLive();
+        const tool = ls.tools.get(data.callID);
+        if (tool) {
+          tool.status = 'completed';
+          tool.completedAt = Date.now();
+          tool.result = (data.content || []).map((x) => x.text || '').join('\n').slice(0, 4000);
+          if (data.metadata && typeof data.metadata.diff === 'string' && data.metadata.diff) {
+            tool.diffs = [{ path: toolBrief(tool.input), unified: data.metadata.diff.slice(0, 12000) }];
+          }
+        }
+        this._updateToolActivity();
+        this._emitLive(true);
+        this.refreshSoon();
+        break;
+      }
+      case 'session.tool.failed': {
+        const ls = this._ensureLive();
+        const tool = ls.tools.get(data.callID);
+        if (tool) {
+          tool.status = 'error';
+          tool.completedAt = Date.now();
+          tool.result = data.error ? (data.error.message || JSON.stringify(data.error)) : 'error';
+        }
+        this._updateToolActivity();
+        this._emitLive(true);
+        this.refreshSoon();
+        break;
+      }
+      case 'session.compaction.started':
+        this._ensureLive().compaction = '';
+        this._setActivity('compacting', 'Compacting context…');
+        this._emitLive(true);
+        break;
+      case 'session.compaction.delta':
+        this._ensureLive().compaction += data.text || data.delta || '';
+        this._setActivity('compacting', 'Compacting context…');
+        this._emitLive();
+        break;
+      case 'session.compaction.ended':
+      case 'session.compaction.failed':
+        if (this.liveState) this.liveState.compaction = '';
+        this._emitLive(true);
+        this.refreshSoon();
+        break;
+      case 'session.shell.started':
+        this._setActivity('shell', 'Running shell command…');
+        break;
+      case 'session.shell.ended':
+        this.refreshSoon();
+        break;
+      case 'session.retry.scheduled':
+        this._setActivity('retry', (data.error && data.error.message) || 'Retrying…', { attempt: data.attempt || 1, nextAt: data.at || 0 });
+        this._log(`retry #${data.attempt || 1}: ${(data.error && data.error.message) || ''}`);
+        break;
+      case 'session.usage.updated':
+        this._mergeSessionUsage(data.tokens, data.cost);
+        break;
+      case 'session.renamed':
+        this.title = data.title || '';
+        this._emitUpdate(true);
+        break;
+      case 'session.agent.selected':
+        this.activeAgent = data.agent || '';
+        this._emitUpdate(true);
+        break;
+      case 'session.model.selected':
+        this.refreshModel();
+        break;
+      case 'todo.updated':
+        this.plan = (data.todos || []).map((x) => ({
+          content: x.content || x.title || '',
+          status: x.status || 'pending',
+          priority: x.priority || '',
+        }));
+        this._emitUpdate(true);
+        break;
+      case 'permission.v2.asked':
+      case 'permission.asked':
+        this._onPermissionAsked(data);
+        break;
+      case 'permission.v2.replied':
+      case 'permission.replied':
+        this._onPermissionResolved(data.requestID || data.id);
+        break;
+      case 'question.v2.asked':
+      case 'question.asked':
+        this._onQuestionAsked(data);
+        break;
+      case 'question.v2.replied':
+      case 'question.replied':
+      case 'question.v2.rejected':
+      case 'question.rejected':
+        this._onQuestionResolved(data.requestID || data.id);
+        break;
+      case 'session.inbox.delivered':
+      case 'session.tool.ended':
+        this.refreshSoon();
+        break;
+      default:
+        break;
     }
+  }
+
+  _updateToolActivity() {
+    if (!this.liveState) return;
+    const active = [...this.liveState.tools.values()].find((t) => t.status === 'running' || t.status === 'streaming');
+    if (active) {
+      const subj = toolBrief(active.input);
+      this._setActivity('tool', `${active.status === 'streaming' ? 'Preparing' : 'Running'} ${active.name}${subj && !active.name.includes(subj) ? ': ' + subj : ''}`);
+    } else {
+      this._setActivity('thinking', 'Processing tool result…');
+    }
+  }
+
+  _mergeStepUsage(tokens, cost, countTurn) {
+    const tok = normalizeTokens(tokens);
+    if (!tok && typeof cost !== 'number') return;
+    const prev = this.usage || {};
+    const used = tok ? (tok.input + tok.cacheRead + tok.cacheWrite + tok.output + tok.reasoning) : (prev.used || 0);
+    const prevCost = prev.cost && typeof prev.cost.amount === 'number' ? prev.cost.amount : 0;
+    const nextCost = typeof cost === 'number' ? prevCost + cost : prevCost;
+    this.usage = {
+      ...prev,
+      used,
+      size: this.contextLimit || prev.size || 0,
+      inputTokens: (prev.inputTokens || 0) + (tok ? tok.input : 0),
+      outputTokens: (prev.outputTokens || 0) + (tok ? tok.output : 0),
+      reasoningTokens: (prev.reasoningTokens || 0) + (tok ? tok.reasoning : 0),
+      cacheReadTokens: (prev.cacheReadTokens || 0) + (tok ? tok.cacheRead : 0),
+      cacheWriteTokens: (prev.cacheWriteTokens || 0) + (tok ? tok.cacheWrite : 0),
+      totalTokens: (prev.totalTokens || 0) + (tok ? tok.total : 0),
+      turns: (prev.turns || 0) + (countTurn ? 1 : 0),
+      ...(typeof cost === 'number' || prev.cost ? { cost: { amount: nextCost, currency: 'USD' } } : {}),
+    };
+    this._emitUpdate();
+  }
+
+  _mergeSessionUsage(tokens, cost) {
+    const tok = normalizeTokens(tokens);
+    if (!tok && typeof cost !== 'number') return;
+    const prev = this.usage || {};
+    this.usage = {
+      ...prev,
+      size: this.contextLimit || prev.size || 0,
+      ...(tok ? {
+        inputTokens: Math.max(prev.inputTokens || 0, tok.input),
+        outputTokens: Math.max(prev.outputTokens || 0, tok.output),
+        reasoningTokens: Math.max(prev.reasoningTokens || 0, tok.reasoning),
+        cacheReadTokens: Math.max(prev.cacheReadTokens || 0, tok.cacheRead),
+        cacheWriteTokens: Math.max(prev.cacheWriteTokens || 0, tok.cacheWrite),
+        totalTokens: Math.max(prev.totalTokens || 0, tok.total),
+        used: prev.used || (tok.input + tok.cacheRead + tok.cacheWrite),
+      } : {}),
+      ...(typeof cost === 'number' ? { cost: { amount: cost, currency: 'USD' } } : {}),
+    };
+    this._emitUpdate();
+  }
+
+  // ---------- permissions & questions ----------
+  _normalizePermission(raw) {
+    const id = raw.id || raw.requestID;
+    const action = raw.action || raw.permission || 'tool';
+    const patterns = Array.isArray(raw.resources) ? raw.resources : (Array.isArray(raw.patterns) ? raw.patterns : []);
+    const title = patterns.length ? `${action}: ${patterns.join(', ')}` : action;
+    const kind = READ_ACTIONS.has(String(action).toLowerCase()) ? 'read' : 'execute';
+    return {
+      id,
+      title,
+      kind,
+      action,
+      input: patterns.length ? { action, resources: patterns, ...(raw.metadata || {}) } : (raw.metadata || null),
+      options: [
+        { id: 'once', name: 'Allow once', kind: 'allow_once' },
+        { id: 'always', name: 'Always allow', kind: 'allow_always' },
+        { id: 'reject', name: 'Deny', kind: 'reject_once' },
+      ],
+    };
+  }
+
+  _autoApproveKind(kind) {
+    return this.approval === 'all' || (this.approval === 'reads' && kind === 'read');
+  }
+
+  _onPermissionAsked(raw) {
+    const req = this._normalizePermission(raw);
+    if (!req.id) return;
+    if (this._autoApproveKind(req.kind)) {
+      this._log(`auto-approved (${this.approval}): ${req.title}`);
+      if (this.client && this.agentSessionId) {
+        this.client.replyPermission(this.agentSessionId, req.id, 'once').catch((e) => this._log('auto-approve failed: ' + e.message));
+      }
+      return;
+    }
+    if (!this.pendingPermissions.some((x) => x.id === req.id)) this.pendingPermissions.push(req);
+    this.permission = this.pendingPermissions[0] || null;
+    this.setStatus('waiting', 'permission');
+    this._setActivity('permission', `Waiting for permission: ${req.title}`);
+    this._emitUpdate(true);
+    this.mgr.emit('agent-permission', this, this.permission);
+  }
+
+  _onPermissionResolved(requestId) {
+    this.pendingPermissions = this.pendingPermissions.filter((x) => x.id !== requestId);
+    this.permission = this.pendingPermissions[0] || null;
+    this.mgr.emit('agent-permission', this, this.permission);
+    if (this.permission) {
+      this._setActivity('permission', `Waiting for permission: ${this.permission.title}`);
+    } else if (this.liveState) {
+      this.setStatus('working', 'permission answered');
+      this._setActivity('thinking', 'Continuing…');
+    } else if (!this.question) {
+      this._setActivity('idle');
+    }
+    this._emitUpdate(true);
+  }
+
+  setApproval(policy) {
+    this.approval = ['ask', 'reads', 'all'].includes(policy) ? policy : 'ask';
+    this.mgr.persistOpen(this.projectId);
+    this._emitUpdate(true);
+    if (this.permission && this._autoApproveKind(this.permission.kind)) {
+      this.answerPermission('once').catch(() => {});
+    }
+  }
+
+  async answerPermission(optionId) {
+    const req = this.permission;
+    if (!req) throw new Error('No pending permission request');
+    const reply = ['once', 'always', 'reject'].includes(optionId) ? optionId : 'reject';
+    if (this.client && this.agentSessionId) {
+      await this.client.replyPermission(this.agentSessionId, req.id, reply);
+    }
+    this._onPermissionResolved(req.id);
+  }
+
+  _onQuestionAsked(raw) {
+    const id = raw.id || raw.requestID;
+    if (!id) return;
+    const req = { id, questions: Array.isArray(raw.questions) ? raw.questions : [] };
+    if (!this.pendingQuestions.some((x) => x.id === req.id)) this.pendingQuestions.push(req);
+    this.question = this.pendingQuestions[0] || null;
+    this.setStatus('waiting', 'question');
+    this._setActivity('question', 'Waiting for your answer…');
+    this._emitUpdate(true);
+    this.mgr.emit('agent-question', this, this.question);
+  }
+
+  _onQuestionResolved(requestId) {
+    this.pendingQuestions = this.pendingQuestions.filter((x) => x.id !== requestId);
+    this.question = this.pendingQuestions[0] || null;
+    this.mgr.emit('agent-question', this, this.question);
+    if (this.question) {
+      this._setActivity('question', 'Waiting for your answer…');
+    } else if (this.liveState) {
+      this.setStatus('working', 'question answered');
+      this._setActivity('thinking', 'Continuing…');
+    } else if (!this.permission) {
+      this._setActivity('idle');
+    }
+    this._emitUpdate(true);
+  }
+
+  async answerQuestion(answers) {
+    const req = this.question;
+    if (!req) throw new Error('No pending question');
+    if (this.client && this.agentSessionId) {
+      await this.client.replyQuestion(this.agentSessionId, req.id, answers);
+    }
+    this._onQuestionResolved(req.id);
+  }
+
+  async rejectQuestion() {
+    const req = this.question;
+    if (!req) throw new Error('No pending question');
+    if (this.client && this.agentSessionId) {
+      await this.client.rejectQuestion(this.agentSessionId, req.id);
+    }
+    this._onQuestionResolved(req.id);
+  }
+
+  async _syncPending() {
+    if (!this.client || !this.agentSessionId) return;
+    const [perms, qs] = await Promise.all([
+      this.client.permissions(this.agentSessionId).catch(() => []),
+      this.client.questions(this.agentSessionId).catch(() => []),
+    ]);
+    for (const p of perms) this._onPermissionAsked(p);
+    for (const q of qs) this._onQuestionAsked(q);
+  }
+
+  async _refreshAgents() {
+    if (!this.client) return;
+    const list = await this.client.agents().catch(() => []);
+    this.agentsList = (list || []).filter((a) => a && a.name && a.mode !== 'subagent' && !a.hidden);
+    if (!this.activeAgent && this.agentsList.length) this.activeAgent = this.agentsList[0].name;
+    this._emitUpdate(true);
+  }
+
+  agentOptions() {
+    if (this.agentsList.length < 2) return [];
+    return [{
+      id: 'agent',
+      name: 'Agent',
+      description: 'OpenCode agent mode (e.g. build / plan)',
+      current: this.activeAgent || this.agentsList[0].name,
+      options: this.agentsList.map((a) => ({ value: a.name, name: a.name })),
+    }];
+  }
+
+  async setAgentOption(id, value) {
+    if (!this.client || !this.agentSessionId) throw new Error(`Agent ${this.name} is not connected`);
+    if (id !== 'agent') throw new Error('Unknown option ' + id);
+    await this.client.setAgent(this.agentSessionId, value);
+    this.activeAgent = value;
+    this._log(`agent mode set to ${value}`);
+    this._emitUpdate(true);
   }
 
   refreshSoon() {
@@ -215,8 +697,17 @@ class AgentSession extends BaseSession {
   async refresh() {
     if (!this.client || !this.agentSessionId) return this.messages;
     try {
-      this.messages = simplifyMessages(await this.client.messages(this.agentSessionId));
+      const [raw, sess] = await Promise.all([
+        this.client.messages(this.agentSessionId),
+        this.client.getSession(this.agentSessionId).catch(() => null),
+      ]);
+      this.messages = simplifyMessages(raw);
+      if (sess && sess.title) this.title = sess.title;
+      if (sess && sess.agent) this.activeAgent = sess.agent;
+      const computed = computeUsage(raw, sess, this.contextLimit);
+      if (computed) this.usage = computed;
       this.mgr.emit('agent-messages', this, this.messages);
+      this._emitUpdate(true);
     } catch (e) {
       this._log('refresh: ' + e.message);
     }
@@ -234,6 +725,7 @@ class AgentSession extends BaseSession {
     this.hadInput = true;
     await this.client.prompt(this.agentSessionId, text);
     this.setStatus('working', 'input');
+    this._setActivity('thinking', 'Sending prompt…');
     this.refreshSoon();
   }
 
@@ -258,6 +750,11 @@ class AgentSession extends BaseSession {
     this.close({ keep: true });
     this._closed = false;
     this.disconnected = false;
+    this.liveState = null;
+    this.permission = null;
+    this.pendingPermissions = [];
+    this.question = null;
+    this.pendingQuestions = [];
     this.start();
   }
 
@@ -272,6 +769,8 @@ class AgentSession extends BaseSession {
   async refreshModel() {
     try {
       const s = await this.client.getSession(this.agentSessionId);
+      if (s && s.title) this.title = s.title;
+      if (s && s.agent) this.activeAgent = s.agent;
       let ref = s && s.model;
       if (!ref || !ref.id) {
         const d = (await this.client.api('GET', '/api/model/default')).data;
@@ -279,10 +778,12 @@ class AgentSession extends BaseSession {
       }
       const models = await this.client.listModels().catch(() => []);
       const m = ref && models.find((x) => x.providerID === ref.providerID && x.id === ref.id);
+      this.contextLimit = (m && m.contextLimit) || 0;
+      if (this.usage && this.contextLimit) this.usage = { ...this.usage, size: this.contextLimit };
       this.modelRef = ref ? { providerID: ref.providerID, id: ref.id, variant: ref.variant && ref.variant !== 'default' ? ref.variant : '' } : null;
       this.model = ref ? `${ref.providerID}/${ref.id}${m && m.name ? ' (' + m.name + ')' : ''}${this.modelRef.variant ? ' · ' + this.modelRef.variant : ''}` : '';
     } catch { this.model = ''; }
-    this.mgr.emit('updated', this);
+    this._emitUpdate(true);
   }
 
   // Slash commands: built-ins handled by the app, OpenCode custom commands and skills.
@@ -308,7 +809,11 @@ class AgentSession extends BaseSession {
     switch (name) {
       case 'model': case 'login': case 'help': return { handled: 'ui', name };
       case 'stop': await this.interrupt(); return { ok: true };
-      case 'compact': await this.client.compact(this.agentSessionId); this.refreshSoon(); return { ok: true };
+      case 'compact':
+        this._setActivity('compacting', 'Compacting context…');
+        await this.client.compact(this.agentSessionId);
+        this.refreshSoon();
+        return { ok: true };
       case 'shell': return this._shell(args.trim());
       case 'new': {
         const s = await this.client.createSession();
@@ -317,6 +822,16 @@ class AgentSession extends BaseSession {
         if (this.chosenModel) await this.client.setModel(s.id, this.chosenModel, this.chosenModel.variant || undefined).catch(() => {});
         this.mgr.persistOpen(this.projectId);
         this.messages = [];
+        this.usage = null;
+        this.plan = [];
+        this.title = '';
+        this.liveState = null;
+        this.permission = null;
+        this.pendingPermissions = [];
+        this.question = null;
+        this.pendingQuestions = [];
+        this._setActivity('idle');
+        this._emitLive(true);
         this.mgr.emit('agent-messages', this, this.messages);
         await this.refreshModel();
         return { ok: true };
@@ -331,6 +846,7 @@ class AgentSession extends BaseSession {
           await this.client.prompt(this.agentSessionId, args || `Use the ${skill.name} skill.`, { skills: [skill.id] });
         }
         this.setStatus('working', 'input');
+        this._setActivity('thinking', `Running /${name}…`);
         this.refreshSoon();
         return { ok: true };
       }
@@ -340,6 +856,7 @@ class AgentSession extends BaseSession {
   async _shell(command) {
     if (!command) throw new Error('Usage: /shell <command>  or  !<command>');
     this.hadInput = true;
+    this._setActivity('shell', `$ ${command.slice(0, 60)}`);
     await this.client.shell(this.agentSessionId, command);
     this.refreshSoon();
     return { ok: true };
@@ -361,16 +878,38 @@ class AgentSession extends BaseSession {
   }
 
   info() {
-    return { ...super.info(), agentSessionId: this.agentSessionId, url: this.client && this.client.url, model: this.model || '' };
+    return {
+      ...super.info(),
+      agentSessionId: this.agentSessionId,
+      url: this.client && this.client.url,
+      model: this.model || '',
+      title: this.title || '',
+      usage: this.usage || null,
+      activity: this.activity || null,
+      plan: this.plan || [],
+      permission: this.permission || null,
+      question: this.question || null,
+      approval: this.approval || 'ask',
+      agentOptions: this.agentOptions(),
+    };
   }
 
   // Values persisted with the open-session list so the agent can be re-attached after restart.
   persistExtra() {
-    return { agentKey: this.agentKey, remotePort: this.remotePort, agentSessionId: this.agentSessionId, model: this.chosenModel || null };
+    return {
+      agentKey: this.agentKey,
+      remotePort: this.remotePort,
+      agentSessionId: this.agentSessionId,
+      model: this.chosenModel || null,
+      approval: this.approval || 'ask',
+    };
   }
 
   close({ killTmux = false } = {}) {
     this._closed = true;
+    clearTimeout(this._rt);
+    clearTimeout(this._updTimer);
+    clearTimeout(this._liveTimer);
     if (this.client) this.client.close();
     if (this.server) this.server.stop();
     for (const p of this.procs) { try { p.kill(); } catch {} }

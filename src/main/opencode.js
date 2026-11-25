@@ -138,12 +138,29 @@ class OpenCodeClient extends EventEmitter {
     if (variant) body.variant = variant;
     return this.api('POST', `/api/session/${id}/model`, { model: body });
   }
-  // Models of all connected providers: [{providerID, id, name, variants: [ids]}]
+  // Models of all connected providers: [{providerID, id, name, variants: [ids], contextLimit}]
   async listModels() {
     const r = await this.api('GET', '/api/model');
     return (r.data || []).filter((m) => m.enabled !== false && m.status !== 'deprecated').map((m) => ({
-      providerID: m.providerID, id: m.id || m.modelID, name: m.name || m.id, variants: (m.variants || []).map((v) => v.id),
+      providerID: m.providerID,
+      id: m.id || m.modelID,
+      name: m.name || m.id,
+      variants: (m.variants || []).map((v) => v.id),
+      contextLimit: (m.limit && m.limit.context) || m.context_length || 0,
     }));
+  }
+  agents() { return this.api('GET', '/api/agent').then((r) => r.data || []); }
+  setAgent(id, agent) { return this.api('POST', `/api/session/${id}/agent`, { agent }); }
+  permissions(id) { return this.api('GET', `/api/session/${id}/permission`).then((r) => r.data || []); }
+  replyPermission(id, requestId, reply, message) {
+    return this.api('POST', `/api/session/${id}/permission/${encodeURIComponent(requestId)}/reply`, message ? { reply, message } : { reply });
+  }
+  questions(id) { return this.api('GET', `/api/session/${id}/question`).then((r) => r.data || []); }
+  replyQuestion(id, requestId, answers) {
+    return this.api('POST', `/api/session/${id}/question/${encodeURIComponent(requestId)}/reply`, { answers });
+  }
+  rejectQuestion(id, requestId) {
+    return this.api('POST', `/api/session/${id}/question/${encodeURIComponent(requestId)}/reject`, {});
   }
   prompt(id, text, { skills } = {}) {
     const body = { text };
@@ -208,25 +225,132 @@ class LocalOpenCodeServer extends EventEmitter {
   }
 }
 
-// Flatten OpenCode messages into simple {role, text, ...} entries for UI, MCP and orchestrator events.
+// Normalize OpenCode v2 token object ({ input, output, reasoning, cache: { read, write } }) to flat numbers.
+function normalizeTokens(t) {
+  if (!t || typeof t !== 'object') return null;
+  const input = Number(t.input) || 0;
+  const output = Number(t.output) || 0;
+  const reasoning = Number(t.reasoning) || 0;
+  const cacheRead = Number((t.cache && t.cache.read) || t.cacheRead) || 0;
+  const cacheWrite = Number((t.cache && t.cache.write) || t.cacheWrite) || 0;
+  const total = Number(t.total) || (input + output + reasoning + cacheRead + cacheWrite);
+  return { input, output, reasoning, cacheRead, cacheWrite, total };
+}
+
+// Compute live context window + cumulative session token/cost usage from OpenCode messages & session info.
+function computeUsage(rawMsgs, sessionInfo, contextLimit = 0) {
+  let inputTokens = 0, outputTokens = 0, reasoningTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0, totalTokens = 0;
+  let costAmount = 0;
+  let hasCost = false;
+  let turns = 0;
+  let lastUsed = 0;
+  let lastTime = -1;
+
+  for (const m of rawMsgs || []) {
+    if (m.type !== 'assistant') continue;
+    const tok = normalizeTokens(m.tokens);
+    if (tok && tok.total > 0) {
+      turns++;
+      inputTokens += tok.input;
+      outputTokens += tok.output;
+      reasoningTokens += tok.reasoning;
+      cacheReadTokens += tok.cacheRead;
+      cacheWriteTokens += tok.cacheWrite;
+      totalTokens += tok.total;
+      const t = (m.time && (m.time.completed || m.time.created)) || 0;
+      if (t >= lastTime) {
+        lastTime = t;
+        lastUsed = tok.input + tok.cacheRead + tok.cacheWrite + tok.output + tok.reasoning;
+      }
+    }
+    if (typeof m.cost === 'number') { costAmount += m.cost; hasCost = true; }
+  }
+
+  // Fallback to session-level aggregate when messages don't include per-step token stats yet.
+  const sessTok = sessionInfo && normalizeTokens(sessionInfo.tokens);
+  if (!totalTokens && sessTok && sessTok.total > 0) {
+    inputTokens = sessTok.input;
+    outputTokens = sessTok.output;
+    reasoningTokens = sessTok.reasoning;
+    cacheReadTokens = sessTok.cacheRead;
+    cacheWriteTokens = sessTok.cacheWrite;
+    totalTokens = sessTok.total;
+    if (!lastUsed) lastUsed = sessTok.input + sessTok.cacheRead + sessTok.cacheWrite;
+  }
+  if (!hasCost && sessionInfo && typeof sessionInfo.cost === 'number') {
+    costAmount = sessionInfo.cost;
+    hasCost = true;
+  }
+
+  if (!totalTokens && !lastUsed && !hasCost) return null;
+  return {
+    used: lastUsed,
+    size: contextLimit || 0,
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens,
+    turns,
+    ...(hasCost ? { cost: { amount: costAmount, currency: 'USD' } } : {}),
+  };
+}
+
+// Flatten OpenCode messages into simple {role, text, thought, tools, ...} entries for UI, MCP and orchestrator events.
 function simplifyMessages(msgs) {
   const out = [];
   for (const m of msgs) {
     if (m.type === 'user') out.push({ id: m.id, role: 'user', text: m.text || (m.payload && m.payload.text) || '', time: m.time && m.time.created });
     else if (m.type === 'assistant') {
       const parts = [];
+      const thoughts = [];
       const tools = [];
       for (const c of m.content || []) {
         if (c.type === 'text') parts.push(c.text);
+        else if (c.type === 'reasoning') { if (c.text) thoughts.push(c.text); }
         else if (c.type === 'tool') {
           const st = c.state || {};
+          const meta = st.metadata || {};
           let result = '';
           if (st.status === 'completed') result = (st.content || []).map((x) => x.text || '').join('\n');
           else if (st.status === 'error') result = st.error ? (st.error.message || JSON.stringify(st.error)) : 'error';
-          tools.push({ id: c.id, name: c.name, status: st.status, input: st.input, result: result.slice(0, 4000) });
+          else if (st.status === 'running' && typeof meta.output === 'string') result = meta.output;
+          const diff = typeof meta.diff === 'string' && meta.diff ? meta.diff.slice(0, 12000) : '';
+          tools.push({
+            id: c.id,
+            name: c.name,
+            status: st.status,
+            input: st.input,
+            result: result.slice(0, 4000),
+            ...(diff ? { diffs: [{ path: (st.input && (st.input.filePath || st.input.file_path || st.input.path)) || '', unified: diff }] } : {}),
+            startedAt: (c.time && (c.time.ran || c.time.created)) || undefined,
+            completedAt: (c.time && c.time.completed) || undefined,
+          });
         }
       }
-      out.push({ id: m.id, role: 'assistant', text: parts.join('\n'), tools, time: m.time && m.time.created, done: !!(m.time && m.time.completed), error: m.error && (m.error.message || String(m.error)) });
+      out.push({
+        id: m.id,
+        role: 'assistant',
+        text: parts.join('\n'),
+        ...(thoughts.length ? { thought: thoughts.join('\n') } : {}),
+        tools,
+        time: m.time && m.time.created,
+        done: !!(m.time && m.time.completed),
+        error: m.error && (m.error.message || String(m.error)),
+        ...(m.retry ? { retry: m.retry } : {}),
+        ...(m.tokens ? { tokens: normalizeTokens(m.tokens) } : {}),
+        ...(typeof m.cost === 'number' ? { cost: m.cost } : {}),
+      });
+    } else if (m.type === 'compaction') {
+      out.push({
+        id: m.id,
+        role: 'system',
+        compaction: true,
+        text: m.summary ? `Context compacted:\n${m.summary}` : (m.status === 'running' ? 'Compacting context…' : 'Context compacted'),
+        time: m.time && m.time.created,
+        done: m.status !== 'running',
+      });
     } else if (m.type === 'synthetic' || m.type === 'system') out.push({ id: m.id, role: 'system', text: m.text || '', time: m.time && m.time.created });
     else if (m.type === 'shell') out.push({ id: m.id, role: 'shell', text: `$ ${m.command}\n${(m.output && m.output.output) || ''}`, time: m.time && m.time.created });
     else if (m.type === 'idle') out.push({ id: m.id, role: 'idle', outcome: m.outcome, time: m.time && m.time.created });
@@ -244,4 +368,4 @@ function messagesToText(simple, n = 20) {
   }).join('\n\n');
 }
 
-module.exports = { OpenCodeClient, LocalOpenCodeServer, findOpencode, freePort, simplifyMessages, messagesToText };
+module.exports = { OpenCodeClient, LocalOpenCodeServer, findOpencode, freePort, normalizeTokens, computeUsage, simplifyMessages, messagesToText };

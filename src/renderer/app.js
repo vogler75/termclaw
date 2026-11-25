@@ -2,7 +2,7 @@
 import { h, clear, toast, contextMenu, prompt, confirmDialog, timeAgo, modal } from './ui.js';
 import { TermView } from './terms.js';
 import { SCHEMES, schemeById } from './schemes.js';
-import { renderChat, renderChatLog, renderPermission } from './chat.js';
+import { renderChat, renderChatLog, renderPermission, renderQuestion, renderActivity, renderPlan } from './chat.js';
 import * as pages from './pages.js';
 import * as agents from './agents.js';
 import * as files from './files.js';
@@ -52,22 +52,37 @@ const GIT_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" fill="none" str
 const EXTRAS = [
   { key: 'docker', label: 'Docker', glyph: () => '🐳', title: 'Docker containers, images and volumes', on: (p) => !!(p.docker && p.docker.enabled), mod: docker },
   { key: 'monitor', label: 'Monitor', glyph: () => '📈', title: 'CPU, memory, disk and network I/O, mounts and programs of the machine', on: (p) => !!(p.monitor && p.monitor.enabled), mod: monitor },
-  { key: 'git', label: 'Git', glyph: (p) => h('span', { class: 'git-glyph' + (gitClean.get(p.id) === true ? ' clean' : ''), 'data-git-glyph': p.id, title: gitTitle(p.id), html: GIT_SVG }), title: 'Git repositories: changes, commit, push and pull, branches, history', on: (p) => !!(p.git && p.git.enabled), mod: git },
+  { key: 'git', label: 'Git', glyph: (p) => h('span', { class: gitGlyphClass(p.id), 'data-git-glyph': p.id, title: gitTitle(p.id), html: GIT_SVG }), title: 'Git repositories: changes, commit, push and pull, branches, history', on: (p) => !!(p.git && p.git.enabled), mod: git },
 ];
-// Git icon: green when every repository of the project is clean, orange when there are changes (or unknown yet).
-const gitClean = new Map(); // projectId -> true | false
-const gitTitle = (pid) => (gitClean.get(pid) === true ? 'Git: no local changes' : gitClean.get(pid) === false ? 'Git: uncommitted changes' : 'Git');
-function setGitClean(pid, clean) {
-  if (gitClean.get(pid) === clean) return;
-  gitClean.set(pid, clean);
-  document.querySelectorAll(`[data-git-glyph="${CSS.escape(pid)}"]`).forEach((el) => { el.classList.toggle('clean', clean === true); el.title = gitTitle(pid); });
+// Git icon: green when every repository is clean, orange-red only when there are uncommitted changes, neutral gray when unknown.
+const gitState = new Map(); // projectId -> { clean: true|false|null, dirtyRepos: string[], totalChanges: number }
+const gitGlyphClass = (pid) => {
+  const st = gitState.get(pid);
+  if (!st || st.clean === null) return 'git-glyph';
+  return 'git-glyph ' + (st.clean ? 'clean' : 'dirty');
+};
+const gitTitle = (pid) => {
+  const st = gitState.get(pid);
+  if (!st || st.clean === null) return 'Git';
+  if (st.clean) return 'Git: no local changes';
+  const names = (st.dirtyRepos || []).slice(0, 4).join(', ');
+  return `Git: ${st.totalChanges || ''} uncommitted change${st.totalChanges === 1 ? '' : 's'}${names ? ' in ' + names : ''}`.replace(/\s+/g, ' ');
+};
+function setGitSummary(pid, summary) {
+  const prev = gitState.get(pid);
+  const next = typeof summary === 'boolean' || summary === null ? { clean: summary, dirtyRepos: [], totalChanges: 0 } : summary;
+  if (prev && prev.clean === next.clean && prev.totalChanges === next.totalChanges && (prev.dirtyRepos || []).join('\0') === (next.dirtyRepos || []).join('\0')) return;
+  gitState.set(pid, next);
+  const cls = gitGlyphClass(pid);
+  const title = gitTitle(pid);
+  document.querySelectorAll(`[data-git-glyph="${CSS.escape(pid)}"]`).forEach((el) => { el.className = cls; el.title = title; });
 }
-git.onSummary(setGitClean);
+git.onSummary(setGitSummary);
 // In the background (the Git tab reports its own updates): one cached repository search per project and minute.
 async function pollGitSummaries() {
   for (const p of S.config.projects) {
     if (!(p.git && p.git.enabled) || git.mountedProject() === p.id) continue;
-    try { const r = await call('gitRepos', p.id, false); setGitClean(p.id, git.isClean(r.repos)); } catch { gitClean.delete(p.id); }
+    try { const r = await call('gitRepos', p.id, false); setGitSummary(p.id, git.summarizeRepos(r.repos)); } catch { gitState.delete(p.id); }
   }
 }
 const extrasOn = (p) => (p ? EXTRAS.filter((x) => x.on(p)) : []);
@@ -77,6 +92,7 @@ function activeExtra(p) {
   return on.find((x) => x.key === S.active[p.id]) || (!projectSessions(p.id).length ? on[0] : null) || null;
 }
 function showExtra(pid, key) { S.projectId = pid; S.view = 'project'; S.active[pid] = key; render(); }
+function showFiles(pid) { S.projectId = pid; S.view = 'project'; S.active[pid] = 'files'; render(); }
 
 function projectStatus(pid) {
   const all = projectSessions(pid);
@@ -280,6 +296,7 @@ const ICONS = {
   settings: svgIcon('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
   projects: svgIcon('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   plus: svgIcon('<path d="M12 5v14M5 12h14"/>'),
+  sortAZ: svgIcon('<path d="M3 8l4-4 4 4M7 4v16M14 7h6l-6 10h6"/>'),
   expandAll: svgIcon('<path d="M7 8l5-5 5 5M7 16l5 5 5-5"/>'),
   collapseAll: svgIcon('<path d="M7 4l5 5 5-5M7 20l5-5 5 5"/>'),
 };
@@ -326,16 +343,35 @@ function renderSidebar() {
     else for (const p of S.config.projects) S.collapsed.add(p.id);
     renderSidebar();
   };
-  sb.appendChild(h('div', { class: 'sb-section' },
-    h('span', { class: 'sb-section-title' }, icon('projects'), 'Projects'),
-    h('span', { class: 'sb-section-actions' },
-      collapsible.length ? h('button', {
-        class: 'icon',
-        title: allCollapsed ? 'Expand all projects' : 'Collapse all projects',
-        'aria-label': allCollapsed ? 'Expand all projects' : 'Collapse all projects',
-        onclick: toggleAllProjects,
-      }, icon(allCollapsed ? 'expandAll' : 'collapseAll')) : null,
-      h('button', { class: 'icon', title: 'New project', onclick: () => pages.editProject(ctx, null) }, icon('plus')))));
+  const sortedByName = !!(S.config.settings && S.config.settings.sortProjectsByName);
+  const toggleSortProjects = () => call('setSortProjectsByName', !sortedByName);
+  sb.appendChild(h('div', {
+    class: 'sb-section',
+    oncontextmenu: (e) => {
+      e.preventDefault();
+      contextMenu(e.clientX, e.clientY, [
+        { label: sortedByName ? '✓ Sort projects by name' : 'Sort projects by name', action: toggleSortProjects },
+        ...(collapsible.length ? [{ label: allCollapsed ? 'Expand all projects' : 'Collapse all projects', action: toggleAllProjects }] : []),
+        '-',
+        { label: 'New project…', action: () => pages.editProject(ctx, null) },
+      ]);
+    },
+  },
+  h('span', { class: 'sb-section-title' }, icon('projects'), 'Projects'),
+  h('span', { class: 'sb-section-actions' },
+    S.config.projects.length > 1 ? h('button', {
+      class: 'icon' + (sortedByName ? ' active' : ''),
+      title: sortedByName ? 'Sorted by name (click to switch to manual order)' : 'Sort projects by name',
+      'aria-label': 'Sort projects by name',
+      onclick: toggleSortProjects,
+    }, icon('sortAZ')) : null,
+    collapsible.length ? h('button', {
+      class: 'icon',
+      title: allCollapsed ? 'Expand all projects' : 'Collapse all projects',
+      'aria-label': allCollapsed ? 'Expand all projects' : 'Collapse all projects',
+      onclick: toggleAllProjects,
+    }, icon(allCollapsed ? 'expandAll' : 'collapseAll')) : null,
+    h('button', { class: 'icon', title: 'New project', onclick: () => pages.editProject(ctx, null) }, icon('plus')))));
 
   const tree = h('div', { class: 'tree' });
   S.config.projects.forEach((p, idx) => {
@@ -358,7 +394,9 @@ function renderSidebar() {
       h('button', { class: 'icon', title: 'Tile view', onclick: (e) => { e.stopPropagation(); S.projectId = p.id; S.view = 'project'; setMode(p, mode(p) === 'tiles' ? 'tabs' : 'tiles'); } }, '▦'),
       h('button', { class: 'icon', title: 'Edit project', onclick: (e) => { e.stopPropagation(); pages.editProject(ctx, p); } }, '⚙')),
     h('span', { class: 'caret', onclick: (e) => { e.stopPropagation(); collapsed ? S.collapsed.delete(p.id) : S.collapsed.add(p.id); renderSidebar(); } }, list.length || extrasOn(p).length ? (collapsed ? '▸' : '▾') : ''));
-    const node = h('div', { class: 'proj' + (selected ? ' selected' : '') }, head);
+    const hasChildren = !!(list.length || extrasOn(p).length);
+    const isCollapsed = collapsed || !hasChildren;
+    const node = h('div', { class: 'proj' + (selected ? ' selected' : '') + (isCollapsed ? ' collapsed' : '') }, head);
     if (!collapsed) {
       const ax = selected ? activeExtra(p) : null;
       const children = h('div', { class: 'proj-children' });
@@ -583,6 +621,7 @@ function renderMain() {
   extraShown = null;
   renderMainView();
   for (const x of EXTRAS) if (x.key !== extraShown) x.mod.unmount();
+  if (extraShown !== 'files') files.unmount();
   const t = focused && terms.get(focused.dataset.sid);
   if (t && t.el.isConnected) t.focus();
 }
@@ -626,7 +665,8 @@ function renderProject(main) {
   const list = projectSessions(p.id);
   const host = p.hostId ? S.config.hosts.find((x) => x.id === p.hostId) : null;
   const m = mode(p);
-  const ax = isHosts ? null : activeExtra(p);
+  const showFilesTab = S.active[p.id] === 'files' && !(p.type === 'ssh' && p.remoteOs === 'windows');
+  const ax = showFilesTab ? { key: 'files', mod: files } : (isHosts ? null : activeExtra(p));
   // One bar: the tabs on the left, the project's actions on the right. Without tabs (tiles, no sessions) the project name takes their place.
   const showTabs = (list.length || (!isHosts && extrasOn(p).length)) && !(m === 'tiles' && list.length > 1 && !ax);
   const aid = ax ? null : activeSessionId(p.id);
@@ -659,9 +699,10 @@ function renderProject(main) {
     h('button', { class: m === 'tabs' ? 'active' : '', onclick: () => setMode(p, 'tabs') }, 'Tabs'),
     h('button', { class: m === 'tiles' ? 'active' : '', onclick: () => setMode(p, 'tiles'), title: 'Tile view (Ctrl+Shift+G)' }, 'Tiles'),
     h('button', {
-      title: isHosts ? 'Browse files for the active terminal' : 'Browse files on the project machine, upload and download (or drop files onto a terminal)',
-      disabled: isHosts && !aid,
-      onclick: () => { const sid = activeSessionId(p.id); const s = sid && S.sessions.get(sid); if (s) browseFrom(s); else if (!isHosts) files.openBrowser(ctx, p.id); },
+      class: showFilesTab ? 'active' : '',
+      title: isHosts ? 'Browse files for the active terminal' : 'File explorer: browse, preview, upload and download files (or drop files onto a terminal)',
+      disabled: isHosts && !aid && !showFilesTab,
+      onclick: () => { const sid = activeSessionId(p.id); const s = !showFilesTab && sid ? S.sessions.get(sid) : null; if (s) browseFrom(s); else if (!isHosts) files.openBrowser(ctx, p.id); },
     }, 'Files'),
     showTabs || isHosts ? null : extrasOn(p).map((x) => h('button', { title: x.title, onclick: () => showExtra(p.id, x.key) }, x.label)),
     isHosts ? null : h('button', { title: 'Install coding agents, deploy MCP servers and skills', onclick: (e) => agents.agentsMenu(ctx, e, p, activeSessionId(p.id)) }, 'Agents ▾'),
@@ -682,7 +723,7 @@ function renderProject(main) {
       }, c.name))));
   }
 
-  if (!list.length && (isHosts || !extrasOn(p).length)) {
+  if (!list.length && !ax && (isHosts || !extrasOn(p).length)) {
     main.appendChild(h('div', { class: 'content' }, h('div', { class: 'empty' },
       h('div', null, isHosts ? 'No open host or local terminals.' : 'No running sessions in this project.'),
       h('div', { class: 'row' },
@@ -941,7 +982,13 @@ const MAJOR = new Set(['error', 'disconnected']);
 on('session:updated', (info) => {
   const prev = S.sessions.get(info.id);
   S.sessions.set(info.id, info);
-  if (info.kind !== 'terminal') { pages.refreshChatStatus(ctx, info.id); renderPermission(ctx, info.id); }
+  if (info.kind !== 'terminal') {
+    pages.refreshChatStatus(ctx, info.id);
+    renderPermission(ctx, info.id);
+    renderQuestion(ctx, info.id);
+    renderActivity(ctx, info.id);
+    renderPlan(ctx, info.id);
+  }
   if (!prev || prev.name !== info.name || prev.shared !== info.shared || prev.error !== info.error || (prev.status !== info.status && (MAJOR.has(prev.status) || MAJOR.has(info.status)))) renderSoon();
   else updateDots(); // plain status changes only recolor the dots, so clicks and double-clicks are not lost to a re-render
 });
@@ -954,11 +1001,23 @@ on('session:status', ({ id, status, lastOutputAt }) => {
   s.lastOutputAt = lastOutputAt;
   if (status === 'error' || wasError) { call('getState').then((st) => { for (const i of st.sessions) S.sessions.set(i.id, i); renderSoon(); }); }
   updateDots();
-  if (s.kind !== 'terminal') pages.refreshChatStatus(ctx, id);
+  if (s.kind !== 'terminal') {
+    pages.refreshChatStatus(ctx, id);
+    renderActivity(ctx, id);
+  }
 });
-on('agent:messages', ({ id, messages }) => { S.agentMessages.set(id, messages); S.agentLive.delete(id); renderChatLog(ctx, id); });
-on('agent:live', ({ id, text }) => { S.agentLive.set(id, text); renderChatLog(ctx, id); });
-on('agent:permission', ({ id, permission }) => { const s = S.sessions.get(id); if (s) s.permission = permission; renderPermission(ctx, id); });
+on('agent:messages', ({ id, messages }) => {
+  S.agentMessages.set(id, messages);
+  const s = S.sessions.get(id);
+  if (!s || s.status !== 'working') S.agentLive.delete(id);
+  renderChatLog(ctx, id);
+});
+on('agent:live', ({ id, text }) => {
+  if (text) S.agentLive.set(id, text); else S.agentLive.delete(id);
+  renderChatLog(ctx, id);
+});
+on('agent:permission', ({ id, permission }) => { const s = S.sessions.get(id); if (s) s.permission = permission; renderPermission(ctx, id); renderActivity(ctx, id); });
+on('agent:question', ({ id, question }) => { const s = S.sessions.get(id); if (s) s.question = question; renderQuestion(ctx, id); renderActivity(ctx, id); });
 on('agent:log', ({ id, line }) => { const l = S.agentLog.get(id) || []; l.push(line); S.agentLog.set(id, l.slice(-50)); });
 on('hosts:status', (snap) => { S.hosts = snap; if (S.view === 'hosts') pages.renderHostsTable(ctx); });
 on('forwards:status', (snap) => { S.forwards = snap; if (S.view === 'project') renderSoon(); });
@@ -967,8 +1026,8 @@ on('mcp:status', (st) => { S.mcp = st; renderSoon(); });
 on('oauth:request', (r) => pages.oauthApproval(ctx, r));
 on('oauth:decided', ({ id }) => pages.oauthDecided(ctx, id));
 on('config:changed', (cfg) => {
-  const structural = JSON.stringify(cfg.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(cfg.hosts) + JSON.stringify(cfg.hostLayout) !==
-    JSON.stringify(S.config.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(S.config.hosts) + JSON.stringify(S.config.hostLayout);
+  const structural = JSON.stringify(cfg.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(cfg.hosts) + JSON.stringify(cfg.hostLayout) + String(!!(cfg.settings && cfg.settings.sortProjectsByName)) !==
+    JSON.stringify(S.config.projects.map((p) => [p.id, p.name, p.type, p.commands, p.forwards, p.layout, p.terminals, p.hostId, p.directory, p.docker, p.monitor, p.git])) + JSON.stringify(S.config.hosts) + JSON.stringify(S.config.hostLayout) + String(!!(S.config.settings && S.config.settings.sortProjectsByName));
   S.config = cfg;
   if (structural && !['settings', 'orch', 'sched', 'mcp'].includes(S.view)) renderSoon();
 });
@@ -982,7 +1041,7 @@ on('show-view', ({ view }) => showView(view));
 // A file dropped anywhere else must not make the window navigate to it.
 for (const ev of ['dragover', 'drop']) document.addEventListener(ev, (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
 
-export const ctx = { S, call, render, renderSoon, showView, openSession, openHostSession, openLocalHostSession, localTerminalAction, selectSession, project, projectSessions, terms, dot, STATUS_LABEL, closeSession, editProject: (p) => pages.editProject(ctx, p) };
+export const ctx = { S, call, render, renderSoon, showView, showExtra, showFiles, openSession, openHostSession, openLocalHostSession, localTerminalAction, selectSession, project, projectSessions, terms, dot, STATUS_LABEL, closeSession, editProject: (p) => pages.editProject(ctx, p) };
 
 // ---------- boot ----------
 (async () => {

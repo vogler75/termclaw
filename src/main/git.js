@@ -31,6 +31,73 @@ function badRef(name) {
   return !name || typeof name !== 'string' || name.startsWith('-') || /[\s~^:?*[\\\x00-\x1f]/.test(name) || name.includes('..');
 }
 
+function badStashRef(ref) {
+  return !/^stash@\{\d+\}$/.test(String(ref || ''));
+}
+
+// Parse an SSH or HTTPS git remote URL into web links for GitHub, GitLab (including self-hosted), or Bitbucket.
+function parseRemoteWeb(rawUrl) {
+  const url = String(rawUrl || '').trim();
+  if (!url) return null;
+  let host = '';
+  let repoPath = '';
+  const scp = /^(?:[^@\s]+@)?([^:/\s]+):(.+)$/.exec(url);
+  if (scp && !url.includes('://')) {
+    host = scp[1];
+    repoPath = scp[2];
+  } else {
+    try {
+      const u = new URL(url);
+      if (!['http:', 'https:', 'ssh:', 'git:'].includes(u.protocol)) return null;
+      host = u.hostname;
+      repoPath = u.pathname.replace(/^\/+/, '');
+    } catch {
+      return null;
+    }
+  }
+  repoPath = repoPath.replace(/\.git$/i, '').replace(/\/+$/, '');
+  if (!host || !repoPath || !repoPath.includes('/')) return null;
+  const low = host.toLowerCase();
+  const provider = low === 'github.com' || low.endsWith('.github.com') || low.includes('github') ? 'github'
+    : low === 'bitbucket.org' || low.includes('bitbucket') ? 'bitbucket'
+    : 'gitlab';
+  const proto = url.startsWith('http://') ? 'http' : 'https';
+  const repoUrl = `${proto}://${host}/${repoPath}`;
+  const encBranch = (b) => encodeURIComponent(b).replace(/%2F/g, '/');
+  return {
+    provider,
+    label: provider === 'github' ? 'GitHub' : provider === 'bitbucket' ? 'Bitbucket' : 'GitLab',
+    prLabel: provider === 'gitlab' ? 'MR' : 'PR',
+    host,
+    path: repoPath,
+    repoUrl,
+    branchUrl: (branch) => provider === 'bitbucket' ? `${repoUrl}/src/${encBranch(branch)}`
+      : provider === 'gitlab' ? `${repoUrl}/-/tree/${encBranch(branch)}`
+      : `${repoUrl}/tree/${encBranch(branch)}`,
+    commitUrl: (sha) => provider === 'bitbucket' ? `${repoUrl}/commits/${sha}`
+      : provider === 'gitlab' ? `${repoUrl}/-/commit/${sha}`
+      : `${repoUrl}/commit/${sha}`,
+    newPrUrl: (branch) => provider === 'bitbucket' ? `${repoUrl}/pull-requests/new?source=${encodeURIComponent(branch)}`
+      : provider === 'gitlab' ? `${repoUrl}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${encodeURIComponent(branch)}`
+      : `${repoUrl}/compare/${encBranch(branch)}?expand=1`,
+  };
+}
+
+function summarizeChecks(rollup) {
+  const list = Array.isArray(rollup) ? rollup : [];
+  if (!list.length) return null;
+  let passed = 0, failed = 0, pending = 0;
+  for (const c of list) {
+    const concl = String(c.conclusion || c.state || '').toUpperCase();
+    const st = String(c.status || '').toUpperCase();
+    if (['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(concl)) passed++;
+    else if (['FAILURE', 'TIMED_OUT', 'CANCELLED', 'ERROR', 'ACTION_REQUIRED', 'STARTUP_FAILURE'].includes(concl)) failed++;
+    else if (st === 'IN_PROGRESS' || st === 'QUEUED' || st === 'PENDING' || concl === 'PENDING' || !concl) pending++;
+    else passed++;
+  }
+  return { total: list.length, passed, failed, pending };
+}
+
 // ---------- running ----------
 
 // Spawns a script on the project machine and collects stdout / stderr.
@@ -347,16 +414,19 @@ class GitManager {
     return pending;
   }
 
-  // Status, branches, history and remote of one repository.
+  // Status, branches, history, remote, stashes and in-progress operation of one repository.
   async state(projectId, repo) {
     const { project, host } = this._ctx(projectId);
-    const [st, br, log, unpushed, remotes, stash] = await runGit(project, host, this._repo(repo), [
+    const [st, br, log, unpushed, remotes, stash, mergeHead, rebaseHead, cherryHead] = await runGit(project, host, this._repo(repo), [
       ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'],
       ['for-each-ref', `--format=${BRANCH_FMT}`, '--sort=-committerdate', 'refs/heads', 'refs/remotes'],
       ['log', `-n${LOG_LIMIT}`, `--format=${LOG_FMT}`, 'HEAD', '--'],
       ['rev-list', '@{upstream}..HEAD', '--'],
       ['remote', '-v'],
-      ['stash', 'list', '--format=%gd'],
+      ['stash', 'list', '--format=%gd%x1f%h%x1f%at%x1f%s'],
+      ['rev-parse', '-q', '--verify', 'MERGE_HEAD'],
+      ['rev-parse', '-q', '--verify', 'REBASE_HEAD'],
+      ['rev-parse', '-q', '--verify', 'CHERRY_PICK_HEAD'],
     ], { timeout: 30000 });
     if (!st || st.code !== 0) throw new Error(errText(st, 'git status'));
     const status = parseStatus(st.out);
@@ -365,6 +435,25 @@ class GitManager {
       const m = /^(\S+)\s+(\S+)\s+\(fetch\)/.exec(l);
       if (m) remoteList.push({ name: m[1], url: m[2] });
     }
+    const primaryRemote = remoteList.find((r) => r.name === 'origin') || remoteList[0] || null;
+    const webInfo = primaryRemote ? parseRemoteWeb(primaryRemote.url) : null;
+    const web = webInfo ? {
+      provider: webInfo.provider,
+      label: webInfo.label,
+      prLabel: webInfo.prLabel,
+      repoUrl: webInfo.repoUrl,
+      branchUrl: status.branch.head && !status.branch.detached ? webInfo.branchUrl(status.branch.head) : webInfo.repoUrl,
+      newPrUrl: status.branch.head && !status.branch.detached ? webInfo.newPrUrl(status.branch.head) : '',
+      commitBase: webInfo.commitUrl(''),
+    } : null;
+    const stashList = (stash && stash.code === 0 ? stash.out : '').split('\n').filter(Boolean).map((line) => {
+      const [ref, hash, at, ...msg] = line.split(US);
+      return { ref, hash, date: Number(at) * 1000 || 0, message: msg.join(US) || ref };
+    });
+    const inProgress = rebaseHead && rebaseHead.code === 0 ? 'rebase'
+      : mergeHead && mergeHead.code === 0 ? 'merge'
+      : cherryHead && cherryHead.code === 0 ? 'cherry-pick'
+      : '';
     const unpushedSet = unpushed && unpushed.code === 0 ? unpushed.out.split('\n').filter(Boolean) : null;
     return {
       repo,
@@ -374,7 +463,10 @@ class GitManager {
       log: log && log.code === 0 ? parseLog(log.out) : [],
       unpushed: unpushedSet,
       remotes: remoteList,
-      stashes: stash && stash.code === 0 ? stash.out.split('\n').filter(Boolean).length : 0,
+      web,
+      stashes: stashList.length,
+      stashList,
+      inProgress,
       at: Date.now(),
     };
   }
@@ -456,29 +548,33 @@ class GitManager {
     return this._action(projectId, repo, 'Commit', cmds, { timeout: 120000 });
   }
 
-  async push(projectId, repo) {
+  async push(projectId, repo, { force = false } = {}) {
     const st = await this.state(projectId, repo);
     const b = st.branch;
     if (b.detached) throw new Error('Not on a branch (detached HEAD)');
-    let cmd = ['push'];
+    let cmd = force ? ['push', '--force-with-lease'] : ['push'];
     if (!b.upstream) {
       const remote = (st.remotes.find((r) => r.name === 'origin') || st.remotes[0] || {}).name;
       if (!remote) throw new Error('This repository has no remote to push to');
       cmd = ['push', '-u', remote, 'HEAD'];
     }
-    return this._action(projectId, repo, 'Push', [cmd], { timeout: 300000 });
+    return this._action(projectId, repo, force ? 'Force push' : 'Push', [cmd], { timeout: 300000 });
   }
 
-  async pull(projectId, repo) { return this._action(projectId, repo, 'Pull', [['pull', '--ff-only']], { timeout: 300000 }); }
+  async pull(projectId, repo, { mode = 'ff' } = {}) {
+    const args = mode === 'rebase' ? ['pull', '--rebase'] : mode === 'merge' ? ['pull', '--no-rebase'] : ['pull', '--ff-only'];
+    const label = mode === 'rebase' ? 'Pull (rebase)' : mode === 'merge' ? 'Pull (merge)' : 'Pull';
+    return this._action(projectId, repo, label, [args], { timeout: 300000 });
+  }
   async fetch(projectId, repo) { return this._action(projectId, repo, 'Fetch', [['fetch', '--all', '--prune']], { timeout: 300000 }); }
 
   // Throws away local changes of the given files (untracked and newly added files are deleted).
-  async discard(projectId, repo, files) {
+  async discard(projectId, repo, files, { initial = false } = {}) {
     const list = (files || []).filter((f) => f && f.path && f.status !== 'conflict');
     if (!list.length) throw new Error('Nothing to discard');
     const untracked = list.filter((f) => f.x === '?').map((f) => f.path);
-    const added = list.filter((f) => f.x === 'A' || f.status === 'renamed' || f.status === 'copied').map((f) => f.path);
-    const restore = [...new Set(list.filter((f) => f.x !== '?' && f.x !== 'A').flatMap((f) => (f.status === 'renamed' ? [f.orig] : f.status === 'copied' ? [] : [f.path])).filter(Boolean))];
+    const added = list.filter((f) => f.x === 'A' || f.status === 'renamed' || f.status === 'copied' || (initial && f.x !== '?')).map((f) => f.path);
+    const restore = initial ? [] : [...new Set(list.filter((f) => f.x !== '?' && f.x !== 'A').flatMap((f) => (f.status === 'renamed' ? [f.orig] : f.status === 'copied' ? [] : [f.path])).filter(Boolean))];
     const cmds = [];
     if (added.length) cmds.push(['rm', '-q', '-f', '-r', '--', ...added]);
     if (restore.length) cmds.push(['checkout', '-q', 'HEAD', '--', ...restore]);
@@ -504,6 +600,152 @@ class GitManager {
   async deleteBranch(projectId, repo, name, { force = false } = {}) {
     if (badRef(name)) throw new Error('Invalid branch name');
     return this._action(projectId, repo, 'Delete branch', [['branch', force ? '-D' : '-d', name]]);
+  }
+
+  async mergeBranch(projectId, repo, name) {
+    if (badRef(name)) throw new Error('Invalid branch name');
+    return this._action(projectId, repo, 'Merge', [['merge', name]]);
+  }
+
+  async rebaseBranch(projectId, repo, name) {
+    if (badRef(name)) throw new Error('Invalid branch name');
+    return this._action(projectId, repo, 'Rebase', [['rebase', name]]);
+  }
+
+  async renameBranch(projectId, repo, { oldName, newName }) {
+    if (badRef(oldName) || badRef(newName)) throw new Error('Invalid branch name');
+    return this._action(projectId, repo, 'Rename branch', [['branch', '-m', oldName, newName]]);
+  }
+
+  async stashPush(projectId, repo, { message = '', includeUntracked = true } = {}) {
+    const args = ['stash', 'push'];
+    if (includeUntracked) args.push('-u');
+    if (String(message || '').trim()) args.push('-m', String(message).trim());
+    return this._action(projectId, repo, 'Stash', [args]);
+  }
+
+  async stashApply(projectId, repo, { ref = 'stash@{0}', pop = false } = {}) {
+    if (badStashRef(ref)) throw new Error('Invalid stash reference');
+    return this._action(projectId, repo, pop ? 'Pop stash' : 'Apply stash', [['stash', pop ? 'pop' : 'apply', ref]]);
+  }
+
+  async stashDrop(projectId, repo, { ref = 'stash@{0}' } = {}) {
+    if (badStashRef(ref)) throw new Error('Invalid stash reference');
+    return this._action(projectId, repo, 'Drop stash', [['stash', 'drop', ref]]);
+  }
+
+  async stashShow(projectId, repo, ref = 'stash@{0}') {
+    if (badStashRef(ref)) throw new Error('Invalid stash reference');
+    const { project, host } = this._ctx(projectId);
+    const [r] = await runGit(project, host, this._repo(repo), [
+      ['--no-pager', 'stash', 'show', '-p', '--include-untracked', '--no-color', ref],
+    ], { timeout: 30000 });
+    if (!r || r.code !== 0) throw new Error(errText(r, 'git stash show'));
+    return cutDiff(r.out);
+  }
+
+  async resolveConflict(projectId, repo, { file, side }) {
+    if (!file || typeof file !== 'string') throw new Error('No file');
+    const cmds = side === 'ours' ? [['checkout', '--ours', '--', file], ['add', '--', file]]
+      : side === 'theirs' ? [['checkout', '--theirs', '--', file], ['add', '--', file]]
+      : [['add', '--', file]];
+    return this._action(projectId, repo, 'Resolve conflict', cmds);
+  }
+
+  async continueOp(projectId, repo, op) {
+    if (!['merge', 'rebase', 'cherry-pick'].includes(op)) throw new Error('Unknown operation');
+    const args = op === 'merge' ? ['merge', '--continue'] : op === 'rebase' ? ['rebase', '--continue'] : ['cherry-pick', '--continue'];
+    // GIT_EDITOR=true avoids blocking waiting for a commit message editor during --continue.
+    return this._action(projectId, repo, `Continue ${op}`, [['-c', 'core.editor=true', ...args]]);
+  }
+
+  async abortOp(projectId, repo, op) {
+    if (!['merge', 'rebase', 'cherry-pick'].includes(op)) throw new Error('Unknown operation');
+    return this._action(projectId, repo, `Abort ${op}`, [[op, '--abort']]);
+  }
+
+  // Optional GitHub CLI (`gh`) helpers: silently return {available: false} when `gh` is missing or not authenticated.
+  async _runGh(project, host, repo, args, timeout = 15000) {
+    checkProject(project);
+    if (localWindows(project)) {
+      return new Promise((resolve) => {
+        execFile('gh', args, { cwd: repo, windowsHide: true, timeout, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, GH_PROMPT_DISABLED: '1' } }, (err, out, stderr) => {
+          if (err && err.code === 'ENOENT') return resolve({ code: 127, out: '', err: 'not found' });
+          resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: String(out), err: String(stderr) });
+        });
+      });
+    }
+    const script = `cd ${posixDir(repo)} 2>/dev/null || exit 97; command -v gh >/dev/null 2>&1 || exit 127; GH_PROMPT_DISABLED=1 gh ${args.map(shq).join(' ')}`;
+    return runSpec(buildRemoteExec(project, host, posixSh(script)), { timeout });
+  }
+
+  async prStatus(projectId, repo) {
+    const { project, host } = this._ctx(projectId);
+    const r = await this._runGh(project, host, this._repo(repo), [
+      'pr', 'view', '--json', 'number,title,state,url,isDraft,reviewDecision,statusCheckRollup',
+    ]);
+    if (r.code === 127) return { available: false, pr: null };
+    if (r.code !== 0) return { available: true, pr: null };
+    try {
+      const p = JSON.parse(r.out);
+      return {
+        available: true,
+        pr: {
+          number: p.number,
+          title: p.title || '',
+          state: p.state || 'OPEN',
+          url: p.url || '',
+          isDraft: !!p.isDraft,
+          reviewDecision: p.reviewDecision || '',
+          checks: summarizeChecks(p.statusCheckRollup),
+        },
+      };
+    } catch {
+      return { available: true, pr: null };
+    }
+  }
+
+  async prList(projectId, repo) {
+    const { project, host } = this._ctx(projectId);
+    const r = await this._runGh(project, host, this._repo(repo), [
+      'pr', 'list', '--limit', '30', '--json', 'number,title,headRefName,author,isDraft,url,updatedAt',
+    ]);
+    if (r.code === 127) return { available: false, prs: [], error: 'GitHub CLI (gh) is not installed on this machine' };
+    if (r.code !== 0) return { available: true, prs: [], error: (r.err || r.out || '').trim().slice(0, 240) };
+    try {
+      const list = JSON.parse(r.out);
+      return {
+        available: true,
+        prs: (Array.isArray(list) ? list : []).map((p) => ({
+          number: p.number,
+          title: p.title || '',
+          branch: p.headRefName || '',
+          author: (p.author && (p.author.login || p.author.name)) || '',
+          isDraft: !!p.isDraft,
+          url: p.url || '',
+          updatedAt: p.updatedAt ? Date.parse(p.updatedAt) : 0,
+        })),
+      };
+    } catch {
+      return { available: true, prs: [] };
+    }
+  }
+
+  async prCheckout(projectId, repo, number) {
+    const n = Number(number);
+    if (!Number.isInteger(n) || n <= 0) throw new Error('Invalid pull request number');
+    const { project, host } = this._ctx(projectId);
+    const key = projectId + '\n' + repo;
+    if (this.busy.has(key)) throw new Error(`Please wait: ${this.busy.get(key)} is still running`);
+    this.busy.set(key, `Checkout PR #${n}`);
+    try {
+      const r = await this._runGh(project, host, this._repo(repo), ['pr', 'checkout', String(n)], 120000);
+      if (r.code !== 0) throw new Error((r.err || r.out || '').trim() || `gh pr checkout failed (${r.code})`);
+      this.scans.delete(projectId);
+      return { ok: true, output: (r.err + r.out).trim() };
+    } finally {
+      this.busy.delete(key);
+    }
   }
 
   // Last commit back into the changes (only offered for commits that are not pushed).
@@ -554,4 +796,4 @@ class GitManager {
   reset(projectId) { this.scans.delete(projectId); }
 }
 
-module.exports = { GitManager, parseStatus, parseBranches, parseLog, parseNameStatus, parseBatch, batchScript, parseScan, scanScript, parseSummary, walkLocal, badRef };
+module.exports = { GitManager, parseStatus, parseBranches, parseLog, parseNameStatus, parseBatch, batchScript, parseScan, scanScript, parseSummary, walkLocal, badRef, parseRemoteWeb, summarizeChecks };

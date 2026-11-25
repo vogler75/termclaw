@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseList, filesFor, LIST_SCRIPT, CWD_SCRIPT } = require('../src/main/files');
+const { parseList, filesFor, LIST_SCRIPT, CWD_SCRIPT, READ_SCRIPT } = require('../src/main/files');
 const { buildSpawn } = require('../src/main/connect');
 
 test('directory listing output is parsed: folders first, names with spaces and tabs', () => {
@@ -47,4 +47,74 @@ test('local projects: list, exists, mkdir, upload and download copy files and fo
   await f.download([{ path: path.join(proj, 'folder'), type: 'dir' }, { path: path.join(proj, 'a.txt'), type: 'file' }], dl);
   assert.strictEqual(fs.readFileSync(path.join(dl, 'folder', 'b.txt'), 'utf8'), 'B');
   assert.strictEqual(fs.readFileSync(path.join(dl, 'a.txt'), 'utf8'), 'A');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('local files read: text, truncation, binary detection, image dataUrl, and remote read script quoting', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-read-'));
+  try {
+    fs.writeFileSync(path.join(root, 'note.md'), '# Hello\nworld\n');
+    fs.writeFileSync(path.join(root, 'big.txt'), 'x'.repeat(200));
+    fs.writeFileSync(path.join(root, 'bin.dat'), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01]));
+    fs.writeFileSync(path.join(root, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const f = filesFor({ type: 'local', directory: root }, null);
+
+    const md = await f.read(path.join(root, 'note.md'));
+    assert.strictEqual(md.binary, false);
+    assert.strictEqual(md.truncated, false);
+    assert.strictEqual(md.content, '# Hello\nworld\n');
+
+    const big = await f.read(path.join(root, 'big.txt'), { maxBytes: 50 });
+    assert.strictEqual(big.binary, false);
+    assert.strictEqual(big.truncated, true);
+    assert.strictEqual(big.size, 200);
+    assert.strictEqual(big.content.length, 50);
+
+    const bin = await f.read(path.join(root, 'bin.dat'));
+    assert.strictEqual(bin.binary, true);
+    assert.strictEqual(bin.dataUrl, '');
+    assert.strictEqual(bin.content, '');
+
+    const img = await f.read(path.join(root, 'pic.png'));
+    assert.strictEqual(img.binary, true);
+    assert.strictEqual(img.mime, 'image/png');
+    assert.ok(img.dataUrl.startsWith('data:image/png;base64,'));
+
+    await assert.rejects(f.read(root), /Not a regular file/);
+
+    const script = READ_SCRIPT("/tmp/a b/c'd.yml", 1024);
+    assert.match(script, /^f='\/tmp\/a b\/c'\\''d\.yml';/);
+    assert.match(script, /head -c 1024 "\$f" \| base64$/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('file viewer helpers: format detection, JSON validation, and syntax tokenization', () => {
+  const { detectFormat, validateJson, tokenizeLine } = require('../src/renderer/file-viewer.js');
+
+  assert.deepStrictEqual(detectFormat('README.md'), { id: 'markdown', label: 'Markdown', previewable: true });
+  assert.deepStrictEqual(detectFormat('docker-compose.yml'), { id: 'yaml', label: 'YAML', previewable: false });
+  assert.deepStrictEqual(detectFormat('package.json'), { id: 'json', label: 'JSON', previewable: false });
+  assert.deepStrictEqual(detectFormat('Dockerfile'), { id: 'shell', label: 'Dockerfile', previewable: false });
+  assert.deepStrictEqual(detectFormat('logo.svg'), { id: 'xml', label: 'SVG', previewable: true });
+  assert.deepStrictEqual(detectFormat('main.rs'), { id: 'code', label: 'Rust', previewable: false });
+
+  const okJson = validateJson('{"a":1,"b":true}');
+  assert.strictEqual(okJson.valid, true);
+  assert.match(okJson.pretty, /\n  "a": 1,/);
+  assert.strictEqual(validateJson('{bad}').valid, false);
+
+  const jsonToks = tokenizeLine('  "name": "termclaw",', 'json');
+  assert.ok(jsonToks.some((t) => t.cls === 'tok-key' && t.text.includes('"name"')));
+  assert.ok(jsonToks.some((t) => t.cls === 'tok-str' && t.text === '"termclaw"'));
+
+  const ymlToks = tokenizeLine('  port: 8080 # web', 'yaml');
+  assert.ok(ymlToks.some((t) => t.cls === 'tok-key' && t.text === 'port'));
+  assert.ok(ymlToks.some((t) => t.cls === 'tok-num' && t.text === '8080'));
+  assert.ok(ymlToks.some((t) => t.cls === 'tok-cmt' && t.text.includes('# web')));
+
+  const mdToks = tokenizeLine('## Heading', 'markdown');
+  assert.deepStrictEqual(mdToks, [{ cls: 'tok-h', text: '## Heading' }]);
 });

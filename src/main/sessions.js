@@ -408,10 +408,10 @@ class SessionManager extends EventEmitter {
     }
   }
 
-  uniqueName(projectId, base) {
+  uniqueName(projectId, base, { numbered = false } = {}) {
     const names = new Set([...this.sessions.values()].filter((s) => s.projectId === projectId).map((s) => s.name));
-    if (!names.has(base)) return base;
-    for (let i = 2; ; i++) if (!names.has(`${base}-${i}`)) return `${base}-${i}`;
+    if (!numbered && !names.has(base)) return base;
+    for (let i = numbered ? 1 : 2; ; i++) if (!names.has(`${base}-${i}`)) return `${base}-${i}`;
   }
 
   open(projectId, opts = {}) {
@@ -426,7 +426,8 @@ class SessionManager extends EventEmitter {
       : onHost ? { command: '', ...opts, name: opts.name || hostSessionName(onHost), kind: 'terminal' }
       : { ...project.defaultSession, ...opts };
     if (windowsTarget(project) && !opts.shell && !onHost && tpl.kind && tpl.kind !== 'terminal') throw new Error('Agent sessions need a Linux or macOS shell; on Windows machines run the agent in a terminal.');
-    const name = opts.exactName ? opts.name : this.uniqueName(projectId, tpl.name || 'shell');
+    const baseName = tpl.name || 'shell';
+    const name = opts.exactName ? opts.name : this.uniqueName(projectId, baseName, { numbered: baseName === 'shell' });
     const o = { ...tpl, name };
     const s = o.kind === 'agent' ? this.agentFactory(this, project, o)
       : o.kind === 'acp' ? this.acpFactory(this, project, o)

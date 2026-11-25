@@ -127,6 +127,10 @@ class AcpSession extends BaseSession {
     this.models = null; // {availableModels, currentModelId} (Copilot style)
     this.permission = null; // pending permission request shown in the UI
     this.approval = ['ask', 'reads', 'all'].includes(opts.approval) ? opts.approval : 'ask';
+    this.activity = null;
+    this.plan = [];
+    this.title = '';
+    this.inFlight = 0;
     this.queue = Promise.resolve();
     if (this.disconnected) this.status = 'disconnected'; else this.start();
   }
@@ -138,9 +142,25 @@ class AcpSession extends BaseSession {
   }
 
   _log(line) {
-    this.log.push(line);
+    this.log.push(`${new Date().toLocaleTimeString()} ${line}`);
     if (this.log.length > 200) this.log.shift();
     this.mgr.emit('agent-log', this, line);
+  }
+
+  getLog() { return [...this.log]; }
+
+  _setActivity(phase, detail = '', extra = {}) {
+    if (!phase || phase === 'idle') {
+      if (!this.activity) return;
+      this.activity = null;
+      this._emitUsage(true);
+      return;
+    }
+    const startedAt = this.activity && this.activity.phase !== 'connecting' && phase !== 'connecting'
+      ? this.activity.startedAt
+      : Date.now();
+    this.activity = { phase, detail, startedAt, ...extra };
+    this._emitUsage();
   }
 
   // ---------- process ----------
@@ -185,6 +205,7 @@ class AcpSession extends BaseSession {
 
   async start() {
     this.setStatus('starting');
+    this._setActivity('connecting', `Starting ${this.agentDef.name} via ACP…`);
     this.error = null;
     this._closed = false;
     try {
@@ -216,9 +237,11 @@ class AcpSession extends BaseSession {
       this.authMethods = init.authMethods || [];
       this._log(`connected to ${this.agentDef.name} via ACP (protocol ${init.protocolVersion})`);
       await this._openSession();
+      this._setActivity('idle');
       this.setStatus('waiting', 'ready');
       this.mgr.emit('updated', this);
     } catch (e) {
+      this._setActivity('idle');
       this._fail(e.exitCode !== undefined ? this._exitMessage(e.exitCode) : this._explain(e));
     }
   }
@@ -359,20 +382,34 @@ class AcpSession extends BaseSession {
     const u = p.update || {};
     this.lastOutputAt = Date.now();
     switch (u.sessionUpdate) {
+      case 'agent_thought_chunk': this._appendThought(u.content); break;
       case 'agent_message_chunk': this._appendText('assistant', u.content); break;
       case 'user_message_chunk': this._appendText('user', u.content); break;
       case 'tool_call': this._toolCall(u); break;
       case 'tool_call_update': this._toolUpdate(u); break;
       case 'plan': this._plan(u); break;
+      case 'session_info_update':
+        if (u.title !== undefined) this.title = u.title || '';
+        this._emitUsage(true);
+        break;
       case 'available_commands_update': this.commands = u.availableCommands || []; break;
       case 'config_option_update': this.configOptions = u.configOptions || this.configOptions; this._updateModelLabel(); break;
       case 'current_model_update': if (this.models) this.models.currentModelId = u.modelId || u.currentModelId; this._updateModelLabel(); break;
       case 'current_mode_update': if (this.modes) this.modes.currentModeId = u.currentModeId || u.modeId; this.mgr.emit('updated', this); break;
-      case 'usage_update':
+      case 'usage_update': {
         // Context usage, sent while the agent works: shown live in the status bar.
-        this.usage = { ...(this.usage || {}), used: u.used, size: u.size, cost: u.cost || (this.usage && this.usage.cost) };
+        const extra = u.usage ? {
+          inputTokens: u.usage.inputTokens ?? (this.usage && this.usage.inputTokens),
+          outputTokens: u.usage.outputTokens ?? (this.usage && this.usage.outputTokens),
+          thoughtTokens: u.usage.thoughtTokens ?? (this.usage && this.usage.thoughtTokens),
+          cachedReadTokens: u.usage.cachedReadTokens ?? (this.usage && this.usage.cachedReadTokens),
+          cachedWriteTokens: u.usage.cachedWriteTokens ?? (this.usage && this.usage.cachedWriteTokens),
+          totalTokens: u.usage.totalTokens ?? (this.usage && this.usage.totalTokens),
+        } : {};
+        this.usage = { ...(this.usage || {}), ...extra, used: u.used, size: u.size, cost: u.cost || (this.usage && this.usage.cost) };
         this._emitUsage();
         break;
+      }
       default: break;
     }
   }
@@ -381,56 +418,172 @@ class AcpSession extends BaseSession {
     const last = this.messages[this.messages.length - 1];
     if (last && last.role === role && !last.done) return last;
     if (last && last.role !== role && !last.done) last.done = true;
-    const m = { id: 'm' + Date.now() + Math.random().toString(36).slice(2, 6), role, text: '', tools: [], time: Date.now(), done: false };
+    const m = { id: 'm' + Date.now() + Math.random().toString(36).slice(2, 6), role, text: '', thought: '', tools: [], time: Date.now(), done: false };
     this.messages.push(m);
     return m;
   }
 
-  _appendText(role, content) {
-    if (!content || content.type !== 'text') return;
-    this._current(role).text += content.text || '';
+  _contentToText(content) {
+    if (!content) return '';
+    if (content.type === 'text') return content.text || '';
+    if (content.type === 'resource_link') return `[${content.name || content.uri || 'resource'}]`;
+    if (content.type === 'resource' && content.resource) return content.resource.text || `[${content.resource.uri || 'resource'}]`;
+    if (content.type === 'image') return `[image: ${content.mimeType || 'image'}]`;
+    return '';
+  }
+
+  _appendThought(content) {
+    const txt = this._contentToText(content);
+    if (!txt) return;
+    const last = this.messages[this.messages.length - 1];
+    if (last && last.role === 'assistant' && !last.done && (last.text || (last.tools && last.tools.length))) last.done = true;
+    const m = this._current('assistant');
+    m.thought = (m.thought || '') + txt;
+    this._setActivity('reasoning', 'Reasoning…');
     this._emitMessages();
+  }
+
+  _appendText(role, content) {
+    const txt = this._contentToText(content);
+    if (!txt) return;
+    if (role === 'assistant') {
+      const last = this.messages[this.messages.length - 1];
+      if (last && last.role === 'assistant' && !last.done && last.tools && last.tools.length) last.done = true;
+    }
+    this._current(role).text += txt;
+    if (role === 'assistant') this._setActivity('responding', 'Writing response…');
+    this._emitMessages();
+  }
+
+  _normalizeLocations(locs) {
+    if (!Array.isArray(locs)) return [];
+    return locs.filter((l) => l && l.path).map((l) => ({ path: l.path, line: l.line || null }));
+  }
+
+  _extractContent(items, rawOutput) {
+    const texts = [];
+    const diffs = [];
+    for (const c of items || []) {
+      if (!c) continue;
+      if (c.type === 'diff') {
+        diffs.push({ path: c.path || '', oldText: c.oldText ?? '', newText: c.newText ?? '' });
+      } else if (c.content && c.content.text) {
+        texts.push(c.content.text);
+      } else if (c.type === 'text' && c.text) {
+        texts.push(c.text);
+      } else if (c.type === 'terminal' && c.terminalId) {
+        texts.push(`[terminal ${c.terminalId}]`);
+      } else {
+        const s = this._contentToText(c.content || c);
+        if (s) texts.push(s);
+      }
+    }
+    if (!texts.length && rawOutput !== undefined && rawOutput !== null) {
+      texts.push(typeof rawOutput === 'string' ? rawOutput : JSON.stringify(rawOutput, null, 2));
+    }
+    return { text: texts.join('\n').slice(0, 4000), diffs };
+  }
+
+  _toolSubjectText(input, locations) {
+    if (locations && locations.length) return locations[0].path + (locations[0].line ? ':' + locations[0].line : '');
+    if (input && typeof input === 'object') {
+      for (const k of ['path', 'filePath', 'file_path', 'command', 'cmd', 'pattern', 'query', 'url', 'description']) {
+        if (typeof input[k] === 'string' && input[k]) return input[k].slice(0, 60);
+      }
+    }
+    return '';
   }
 
   _toolCall(u) {
     if (u.kind) (this._toolKinds || (this._toolKinds = new Map())).set(u.toolCallId, u.kind);
+    const last = this.messages[this.messages.length - 1];
+    if (last && last.role === 'assistant' && !last.done && last.text) last.done = true;
     const m = this._current('assistant');
-    m.tools.push({ id: u.toolCallId, name: u.title || u.kind || 'tool', status: u.status || 'pending', input: u.rawInput, result: '' });
+    const locations = this._normalizeLocations(u.locations);
+    const { text, diffs } = this._extractContent(u.content, u.rawOutput);
+    const tool = {
+      id: u.toolCallId,
+      name: u.title || u.kind || 'tool',
+      kind: u.kind || '',
+      status: u.status || 'pending',
+      input: u.rawInput,
+      locations,
+      diffs,
+      result: text,
+      startedAt: Date.now(),
+    };
+    m.tools.push(tool);
+    const subj = this._toolSubjectText(tool.input, locations);
+    this._setActivity('tool', `Running ${tool.name}${subj && !tool.name.includes(subj) ? ': ' + subj : ''}`);
     this._emitMessages();
   }
 
   _toolUpdate(u) {
+    let found = null;
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const t = (this.messages[i].tools || []).find((x) => x.id === u.toolCallId);
       if (!t) continue;
+      found = t;
       if (u.status) t.status = u.status;
       if (u.title) t.name = u.title;
-      const text = (u.content || []).map((c) => (c.content && c.content.text) || (c.type === 'diff' ? `diff ${c.path || ''}` : '')).filter(Boolean).join('\n');
-      if (text) t.result = text.slice(0, 4000);
+      if (u.kind) {
+        t.kind = u.kind;
+        (this._toolKinds || (this._toolKinds = new Map())).set(u.toolCallId, u.kind);
+      }
+      if (u.rawInput !== undefined) t.input = u.rawInput;
+      if (u.locations) t.locations = this._normalizeLocations(u.locations);
+      const { text, diffs } = this._extractContent(u.content, u.rawOutput);
+      if (text) t.result = text;
+      if (diffs.length) {
+        t.diffs = [...(t.diffs || [])];
+        for (const d of diffs) {
+          const idx = d.path ? t.diffs.findIndex((x) => x.path === d.path) : -1;
+          if (idx >= 0) t.diffs[idx] = d; else t.diffs.push(d);
+        }
+      }
+      if (['completed', 'failed', 'error'].includes(t.status) && !t.completedAt) t.completedAt = Date.now();
       break;
+    }
+    if (found) {
+      if (['completed', 'failed', 'error'].includes(found.status)) {
+        const active = this.messages[this.messages.length - 1]?.tools?.find((x) => ['pending', 'running', 'in_progress'].includes(x.status));
+        if (active) {
+          const subj = this._toolSubjectText(active.input, active.locations);
+          this._setActivity('tool', `Running ${active.name}${subj && !active.name.includes(subj) ? ': ' + subj : ''}`);
+        } else {
+          this._setActivity('thinking', 'Processing tool result…');
+        }
+      } else {
+        const subj = this._toolSubjectText(found.input, found.locations);
+        this._setActivity('tool', `Running ${found.name}${subj && !found.name.includes(subj) ? ': ' + subj : ''}`);
+      }
     }
     this._emitMessages();
   }
 
   _plan(u) {
-    const text = (u.entries || []).map((e) => `${e.status === 'completed' ? '✓' : e.status === 'in_progress' ? '▸' : '○'} ${e.content}`).join('\n');
-    const last = this.messages[this.messages.length - 1];
-    if (last && last.role === 'system' && last.plan) last.text = 'Plan\n' + text;
-    else this.messages.push({ id: 'p' + Date.now(), role: 'system', plan: true, text: 'Plan\n' + text, time: Date.now(), done: true });
-    this._emitMessages();
+    this.plan = (u.entries || []).map((e) => ({
+      content: e.content || '',
+      status: e.status || 'pending',
+      priority: e.priority || '',
+    }));
+    this._emitUsage(true);
   }
 
-  // Usage changes often while the agent works; tell the UI at most every 300 ms.
+  // Usage & activity change often while the agent works; tell the UI at most every 200 ms.
   _emitUsage(now) {
     if (now) { clearTimeout(this._usageTimer); this._usageTimer = null; this.mgr.emit('updated', this); return; }
     if (this._usageTimer) return;
-    this._usageTimer = setTimeout(() => { this._usageTimer = null; this.mgr.emit('updated', this); }, 300);
+    this._usageTimer = setTimeout(() => { this._usageTimer = null; this.mgr.emit('updated', this); }, 200);
   }
 
   _emitMessages(now) {
     clearTimeout(this._emitTimer);
-    const fire = () => this.mgr.emit('agent-messages', this, this.messages.map((m) => ({ ...m, tools: (m.tools || []).map((t) => ({ ...t })) })));
-    if (now) fire(); else this._emitTimer = setTimeout(fire, 120);
+    const fire = () => this.mgr.emit('agent-messages', this, this.messages.map((m) => ({
+      ...m,
+      tools: (m.tools || []).map((t) => ({ ...t, locations: (t.locations || []).slice(), diffs: (t.diffs || []).slice() })),
+    })));
+    if (now) fire(); else this._emitTimer = setTimeout(fire, 100);
   }
 
   // ---------- permissions ----------
@@ -459,6 +612,7 @@ class AcpSession extends BaseSession {
       };
       this.permission = req;
       this.setStatus('waiting', 'permission');
+      this._setActivity('permission', `Waiting for permission: ${title}`);
       this.mgr.emit('updated', this);
       this.mgr.emit('agent-permission', this, this.permissionInfo());
     });
@@ -476,6 +630,7 @@ class AcpSession extends BaseSession {
     this.permission = null;
     req.resolve(optionId ? { outcome: { outcome: 'selected', optionId } } : { outcome: { outcome: 'cancelled' } });
     this.setStatus('working', 'permission answered');
+    this._setActivity('thinking', 'Continuing…');
     this.mgr.emit('updated', this);
     this.mgr.emit('agent-permission', this, null);
   }
@@ -497,32 +652,54 @@ class AcpSession extends BaseSession {
     if (last && !last.done) last.done = true;
     this.messages.push({ id: 'u' + Date.now(), role: 'user', text, time: Date.now(), done: true });
     this._emitMessages(true);
+    this.inFlight++;
     this.setStatus('working', 'input');
+    if (this.inFlight === 1) this._setActivity('thinking', 'Waiting for model…');
+    else this._emitUsage(true);
     // ACP runs one turn at a time; further prompts wait for the current one.
-    const run = this.queue.then(() => this.conn.request('session/prompt', { sessionId: this.acpSessionId, prompt: [{ type: 'text', text }] }))
+    const run = this.queue.then(() => {
+      this._setActivity('thinking', 'Waiting for model…');
+      return this.conn.request('session/prompt', { sessionId: this.acpSessionId, prompt: [{ type: 'text', text }] });
+    })
       .then((r) => {
         const cur = this.messages[this.messages.length - 1];
         if (cur && !cur.done) cur.done = true;
         if (r && r.usage) {
           // Token counts of the finished turn, summed up for the session.
           const t = this.usage || {};
+          const u = r.usage;
           this.usage = {
             ...t,
-            inputTokens: (t.inputTokens || 0) + (r.usage.inputTokens || 0),
-            outputTokens: (t.outputTokens || 0) + (r.usage.outputTokens || 0),
-            totalTokens: (t.totalTokens || 0) + (r.usage.totalTokens || ((r.usage.inputTokens || 0) + (r.usage.outputTokens || 0))),
+            inputTokens: (t.inputTokens || 0) + (u.inputTokens || 0),
+            outputTokens: (t.outputTokens || 0) + (u.outputTokens || 0),
+            thoughtTokens: (t.thoughtTokens || 0) + (u.thoughtTokens || 0),
+            cachedReadTokens: (t.cachedReadTokens || 0) + (u.cachedReadTokens || 0),
+            cachedWriteTokens: (t.cachedWriteTokens || 0) + (u.cachedWriteTokens || 0),
+            totalTokens: (t.totalTokens || 0) + (u.totalTokens || ((u.inputTokens || 0) + (u.outputTokens || 0) + (u.thoughtTokens || 0))),
             turns: (t.turns || 0) + 1,
           };
           this._emitUsage(true);
         }
         if (r && r.stopReason && r.stopReason !== 'end_turn') this.messages.push({ id: 's' + Date.now(), role: 'system', text: `Stopped: ${r.stopReason}`, time: Date.now(), done: true });
         this._emitMessages(true);
-        this.setStatus('waiting', r && r.stopReason);
+        this.inFlight = Math.max(0, this.inFlight - 1);
+        if (this.inFlight === 0) {
+          this._setActivity('idle');
+          this.setStatus('waiting', r && r.stopReason);
+        } else {
+          this._emitUsage(true);
+        }
       })
       .catch((e) => {
         this.messages.push({ id: 'e' + Date.now(), role: 'system', text: this._explain(e), time: Date.now(), done: true });
         this._emitMessages(true);
-        this.setStatus('waiting', 'error');
+        this.inFlight = Math.max(0, this.inFlight - 1);
+        if (this.inFlight === 0) {
+          this._setActivity('idle');
+          this.setStatus('waiting', 'error');
+        } else {
+          this._emitUsage(true);
+        }
       });
     this.queue = run;
     return Promise.resolve();
@@ -545,7 +722,7 @@ class AcpSession extends BaseSession {
   }
 
   lastAssistantText() {
-    const a = [...this.messages].reverse().find((m) => m.role === 'assistant');
+    const a = [...this.messages].reverse().find((m) => m.role === 'assistant' && m.text);
     return a ? a.text : '';
   }
 
@@ -571,6 +748,9 @@ class AcpSession extends BaseSession {
       this.acpSessionId = r.sessionId;
       this.messages = [];
       this.usage = null;
+      this.plan = [];
+      this.title = '';
+      this._setActivity('idle');
       this._applySessionInfo(r);
       this._flushEarly();
       await this._applyChosenModel();
@@ -674,7 +854,8 @@ class AcpSession extends BaseSession {
   info() {
     return {
       ...super.info(), acpAgent: this.acpAgent, agentName: this.agentDef.name, agentSessionId: this.acpSessionId,
-      model: this.model || '', permission: this.permissionInfo(), usage: this.usage || null,
+      model: this.model || '', title: this.title || '', permission: this.permissionInfo(), usage: this.usage || null,
+      activity: this.activity || null, plan: this.plan || [], queuedCount: Math.max(0, (this.inFlight || 0) - 1),
       approval: this.approval || 'ask', agentOptions: this.agentOptions(),
     };
   }
@@ -685,6 +866,8 @@ class AcpSession extends BaseSession {
 
   close() {
     this._closed = true;
+    clearTimeout(this._usageTimer);
+    clearTimeout(this._emitTimer);
     if (this.permission) { try { this.answerPermission(null); } catch {} }
     const p = this.proc;
     this.proc = null;

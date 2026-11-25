@@ -46,6 +46,44 @@ function parseList(out) {
   return { path: dir, entries: sortEntries(entries) };
 }
 
+const MAX_TEXT_BYTES = 512 * 1024;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_MIMES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+};
+
+function imageMime(p) {
+  const ext = path.extname(String(p || '')).toLowerCase();
+  return IMAGE_MIMES[ext] || '';
+}
+
+function isBinaryBuffer(buf) {
+  const n = Math.min(buf.length, 8192);
+  for (let i = 0; i < n; i++) if (buf[i] === 0) return true;
+  return false;
+}
+
+function buildReadResult(filePath, buf, totalSize, limit) {
+  const mime = imageMime(filePath);
+  const truncated = totalSize > limit;
+  if (mime) {
+    if (truncated) return { path: filePath, size: totalSize, truncated: true, binary: true, mime, content: '', dataUrl: '' };
+    return { path: filePath, size: totalSize, truncated: false, binary: true, mime, content: '', dataUrl: `data:${mime};base64,${buf.toString('base64')}` };
+  }
+  if (isBinaryBuffer(buf)) {
+    return { path: filePath, size: totalSize, truncated: false, binary: true, mime: '', content: '', dataUrl: '' };
+  }
+  return { path: filePath, size: totalSize, truncated, binary: false, mime: '', content: buf.toString('utf8'), dataUrl: '' };
+}
+
+const READ_SCRIPT = (filePath, limit) => `f=${shq(filePath)}; [ -f "$f" ] || { echo "Not a readable file" >&2; exit 3; }; wc -c < "$f" | tr -d ' \\t\\r\\n'; printf '\\n'; head -c ${Number(limit)} "$f" | base64`;
+
 const sortEntries = (list) => list.sort((a, b) => (a.type === b.type ? 0 : a.type === 'dir' ? -1 : 1) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
 const posixJoin = (dir, name) => (dir.endsWith('/') ? dir : dir + '/') + name;
@@ -101,6 +139,18 @@ class RemoteFiles {
   async list(dir) {
     const d = dir ? posixDir(dir) : posixDir(projectDir(this.project, this.host)) || '~';
     return parseList(await this.run(LIST_SCRIPT(d)));
+  }
+
+  async read(filePath, { maxBytes } = {}) {
+    if (!filePath || typeof filePath !== 'string') throw new Error('File path is missing');
+    const mime = imageMime(filePath);
+    const limit = maxBytes || (mime ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES);
+    const out = await this.run(READ_SCRIPT(filePath, limit), { timeout: 30000 });
+    const nl = out.indexOf('\n');
+    const size = Number((nl >= 0 ? out.slice(0, nl) : out).trim()) || 0;
+    const b64 = nl >= 0 ? out.slice(nl + 1).replace(/\s+/g, '') : '';
+    const buf = b64 ? Buffer.from(b64, 'base64') : Buffer.alloc(0);
+    return buildReadResult(filePath, buf, size, limit);
   }
 
   // Current directory of a terminal session: tmux pane path, else the shell found by its marker.
@@ -219,6 +269,22 @@ class LocalFiles {
     return { path: d, entries: sortEntries(entries) };
   }
 
+  async read(filePath, { maxBytes } = {}) {
+    if (!filePath || typeof filePath !== 'string') throw new Error('File path is missing');
+    const p = this._resolve(filePath);
+    const st = fs.statSync(p);
+    if (!st.isFile()) throw new Error('Not a regular file');
+    const mime = imageMime(p);
+    const limit = maxBytes || (mime ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES);
+    const toRead = Math.min(st.size, limit);
+    const buf = Buffer.alloc(toRead);
+    if (toRead > 0) {
+      const fd = fs.openSync(p, 'r');
+      try { fs.readSync(fd, buf, 0, toRead, 0); } finally { fs.closeSync(fd); }
+    }
+    return buildReadResult(p, buf, st.size, limit);
+  }
+
   async sessionCwd() { return this.home(); }
 
   async exists(dir, names) { return names.filter((n) => validName(n) && fs.existsSync(path.join(dir, n))); }
@@ -253,4 +319,4 @@ function cleanErr(text) {
   return String(text || '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^\*\*|^Warning: Permanently added/.test(l)).slice(-3).join(' ').slice(0, 400);
 }
 
-module.exports = { filesFor, RemoteFiles, LocalFiles, parseList, LIST_SCRIPT, CWD_SCRIPT };
+module.exports = { filesFor, RemoteFiles, LocalFiles, parseList, LIST_SCRIPT, CWD_SCRIPT, READ_SCRIPT, MAX_TEXT_BYTES };

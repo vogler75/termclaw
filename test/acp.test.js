@@ -56,6 +56,14 @@ test('ACP session: approval policy answers permission requests; token usage is s
     await until(() => s.usage.turns === 2);
     assert.deepStrictEqual({ used: s.usage.used, size: s.usage.size, total: s.usage.totalTokens, input: s.usage.inputTokens }, { used: 1200, size: 100000, total: 2400, input: 2000 });
     assert.strictEqual(s.info().usage.cost.amount, 0.01);
+    assert.strictEqual(s.info().usage.thoughtTokens, 300);
+    assert.strictEqual(s.info().usage.cachedReadTokens, 600);
+    assert.strictEqual(s.info().title, 'Test conversation');
+    assert.deepStrictEqual(s.info().plan.map((x) => [x.content, x.status]), [
+      ['Inspect code', 'completed'],
+      ['Reply to user', 'in_progress'],
+    ]);
+    assert.ok(s.messages.some((m) => m.thought === 'Planning answer…'));
     // "reads": a read tool is approved automatically ...
     await s.send('use a tool to read');
     await until(() => s.messages.some((m) => m.role === 'system' && m.text.startsWith('Auto-approved (read-only): Read file')));
@@ -64,11 +72,16 @@ test('ACP session: approval policy answers permission requests; token usage is s
     await s.send('use a tool to write');
     await until(() => s.permission);
     assert.strictEqual(s.permission.kind, 'edit');
+    assert.strictEqual(s.info().activity.phase, 'permission');
     // switching to "all" answers the pending request
     s.setApproval('all');
     await until(() => !s.permission && s.status === 'waiting');
     assert.strictEqual(s.persistExtra().approval, 'all');
-    assert.ok(s.messages.some((m) => (m.tools || []).some((t) => t.result === 'written')));
+    const writeTool = s.messages.flatMap((m) => m.tools || []).find((t) => t.name === 'Write file' && t.result === 'written');
+    assert.ok(writeTool);
+    assert.deepStrictEqual(writeTool.locations, [{ path: 'x.txt', line: 12 }]);
+    assert.deepStrictEqual(writeTool.diffs, [{ path: 'x.txt', oldText: 'old line\n', newText: 'new line\n' }]);
+    assert.strictEqual(s.info().activity, null);
   } finally {
     s.close();
     delete ACP_AGENTS.fake;
