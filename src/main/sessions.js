@@ -75,7 +75,6 @@ class BaseSession extends EventEmitter {
     this.command = opts.command || '';
     this.kind = opts.kind || 'terminal';
     this.shared = opts.shared !== undefined ? !!opts.shared : true;
-    this.orchestrator = !!opts.orchestrator;
     this.status = 'starting'; // starting | working | waiting | exited | error | disconnected
     // Disconnected by the user: the connection is closed (tmux and remote agent servers keep running),
     // the session stays in the list and comes back with reconnect(). Persisted across restarts.
@@ -107,7 +106,6 @@ class BaseSession extends EventEmitter {
       command: this.command,
       status: this.status,
       shared: this.shared,
-      orchestrator: this.orchestrator,
       lastOutputAt: this.lastOutputAt,
       createdAt: this.createdAt,
       exitCode: this.exitCode,
@@ -507,7 +505,6 @@ class SessionManager extends EventEmitter {
     const s = this.get(id);
     if (!s) return;
     if ('shared' in flags) s.shared = !!flags.shared;
-    if ('orchestrator' in flags) s.orchestrator = !!flags.orchestrator;
     this.emit('updated', s);
     this.persistOpen(s.projectId);
   }
@@ -551,7 +548,7 @@ class SessionManager extends EventEmitter {
   persistOpen(projectId) {
     if (this._shuttingDown) return;
     const list = this.list(projectId).map((s) => ({
-      name: s.name, command: s.command, kind: s.kind, shared: s.shared, orchestrator: s.orchestrator,
+      name: s.name, command: s.command, kind: s.kind, shared: s.shared,
       ...(s.disconnected ? { disconnected: true } : {}),
       ...(s.persistExtra ? s.persistExtra() : {}),
     }));

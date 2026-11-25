@@ -231,7 +231,7 @@ class McpService extends EventEmitter {
     } else if (this.store.settings.mcp.restrictToShared) {
       list = list.filter((s) => s.shared);
     }
-    return list.filter((s) => !s.orchestrator);
+    return list;
   }
 
   _resolve(ctx, ref, project) {

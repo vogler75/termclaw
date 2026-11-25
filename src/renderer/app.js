@@ -382,7 +382,6 @@ function renderSidebar() {
         s.shell ? h('span', { class: 'badge', title: 'Local shell: ' + s.shell.label + (s.shell.dir ? ' · ' + s.shell.dir : '') }, 'local') : null,
         s.host ? h('span', { class: 'badge', title: 'SSH session on the host ' + s.host.name }, s.host.name) : null,
         s.kind !== 'terminal' ? h('span', { class: 'badge', title: s.kind === 'acp' ? (s.agentName || '') + ' via ACP' : 'OpenCode server API' }, s.kind === 'acp' ? 'acp' : 'agent') : null,
-        s.orchestrator ? h('span', { class: 'badge', title: 'Orchestrator-Session' }, 'orch') : null,
         !s.shared ? h('span', { class: 'badge', title: 'Not shared with MCP' }, 'private') : null));
       }
     }
@@ -480,7 +479,6 @@ function sessionMenu(e, s) {
     { label: 'Move up', action: () => call('moveSession', s.id, -1) },
     { label: 'Move down', action: () => call('moveSession', s.id, 1) },
     { label: s.shared ? '✓ Shared with MCP' : 'Share with MCP', action: () => call('setSessionFlags', s.id, { shared: !s.shared }) },
-    { label: s.orchestrator ? '✓ Orchestrator session' : 'Mark as orchestrator', action: () => call('setSessionFlags', s.id, { orchestrator: !s.orchestrator }) },
     ...(s.status === 'disconnected' ? [] : [{ label: 'Disconnect', action: () => call('disconnect', s.id) }]),
     { label: 'Reconnect', action: () => call('reconnect', s.id) },
     { label: 'Browse files…', action: () => browseFrom(s) },
@@ -944,7 +942,7 @@ on('session:updated', (info) => {
   const prev = S.sessions.get(info.id);
   S.sessions.set(info.id, info);
   if (info.kind !== 'terminal') { pages.refreshChatStatus(ctx, info.id); renderPermission(ctx, info.id); }
-  if (!prev || prev.name !== info.name || prev.shared !== info.shared || prev.orchestrator !== info.orchestrator || prev.error !== info.error || (prev.status !== info.status && (MAJOR.has(prev.status) || MAJOR.has(info.status)))) renderSoon();
+  if (!prev || prev.name !== info.name || prev.shared !== info.shared || prev.error !== info.error || (prev.status !== info.status && (MAJOR.has(prev.status) || MAJOR.has(info.status)))) renderSoon();
   else updateDots(); // plain status changes only recolor the dots, so clicks and double-clicks are not lost to a re-render
 });
 on('session:status', ({ id, status, lastOutputAt }) => {

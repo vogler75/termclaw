@@ -75,7 +75,7 @@ const PROJECT_DEFAULTS = {
   forwards: [], // [{local, remote, remoteHost}]
   agentCommand: 'opencode',
   layout: { mode: 'tabs', active: null },
-  openSessions: [], // [{name, command, kind, shared, orchestrator}] restored on start
+  openSessions: [], // [{name, command, kind, shared}] restored on start
   // Coding agent setup: which MCP servers / skills to deploy, to which agents, project or user scope.
   agentSetup: { scope: 'project', agents: 'auto', mcp: [], skills: [], apm: [] },
 };

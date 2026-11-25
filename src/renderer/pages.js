@@ -905,7 +905,7 @@ function editOrchestrator(ctx, o) {
   const others = new Map();
   for (const other of S.orchestrators) if (!o || other.id !== o.id) for (const k of other.watched || []) others.set(k, other.name);
   const keys = new Map();
-  for (const s of S.sessions.values()) if (!s.orchestrator) keys.set(`${s.projectId}/${s.name}`, s);
+  for (const s of S.sessions.values()) keys.set(`${s.projectId}/${s.name}`, s);
   for (const k of x.watched || []) if (!keys.has(k)) keys.set(k, null);
   const checks = h('div', { class: 'checklist' }, keys.size ? [...keys.entries()].map(([k, s]) => {
     const [pid, nm] = k.split('/');
