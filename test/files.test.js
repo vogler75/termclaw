@@ -123,3 +123,25 @@ test('file viewer helpers: format detection, JSON validation, and syntax tokeniz
   const mdToks = tokenizeLine('## Heading', 'markdown');
   assert.deepStrictEqual(mdToks, [{ cls: 'tok-h', text: '## Heading' }]);
 });
+
+test('docker volume browser: volume name validation, path clamping, and read-only enforcement', async () => {
+  const { validVolumeName, volumeInnerPath, volumeVirtPath, DockerVolumeFiles } = require('../src/main/files');
+
+  assert.strictEqual(validVolumeName('pg_data-1.0'), true);
+  assert.strictEqual(validVolumeName('bad/name'), false);
+  assert.strictEqual(validVolumeName('bad:name'), false);
+  assert.strictEqual(validVolumeName('-leading'), false);
+
+  assert.strictEqual(volumeInnerPath(''), '/vol');
+  assert.strictEqual(volumeInnerPath('/'), '/vol');
+  assert.strictEqual(volumeInnerPath('/sub/file.yml'), '/vol/sub/file.yml');
+  assert.strictEqual(volumeInnerPath('/../../etc/passwd'), '/vol/etc/passwd');
+  assert.strictEqual(volumeVirtPath('/vol'), '/');
+  assert.strictEqual(volumeVirtPath('/vol/sub/file.yml'), '/sub/file.yml');
+
+  const vf = new DockerVolumeFiles({ type: 'local' }, null, 'app_data');
+  assert.strictEqual(vf.readOnly, true);
+  await assert.rejects(vf.write('/a.txt', 'hi'), /read-only/);
+  await assert.rejects(vf.mkdir('/', 'dir'), /read-only/);
+  await assert.rejects(vf.upload(['/tmp/x'], '/'), /read-only/);
+});

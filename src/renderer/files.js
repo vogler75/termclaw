@@ -165,9 +165,19 @@ function fileBadge(e) {
   return { text: '📄', cls: 'ficon' };
 }
 
-// Entry point used by app.js, git.js, and context menus: opens the embedded Files tab directly.
+// Entry point used by app.js, git.js, docker.js, and context menus: opens the embedded Files tab directly.
+function refParts(ref) {
+  const s = String(ref || '');
+  const at = s.indexOf('@');
+  const pid = at >= 0 ? s.slice(0, at) : s;
+  const target = at >= 0 ? s.slice(at + 1) : '';
+  const volName = target.startsWith('vol:') ? target.slice(4) : '';
+  const hostId = volName ? '' : target;
+  return { pid, hostId, volName, readOnly: !!volName };
+}
+
 export function openBrowser(ctx, ref, dir = '', file = '') {
-  const [pid] = String(ref).split('@');
+  const { pid } = refParts(ref);
   const d = pstate(pid);
   const changedRef = d.ref !== ref;
   d.ref = ref;
@@ -266,7 +276,7 @@ async function openFile(filePath, name, { edit = false } = {}) {
   try {
     const data = await call('filesRead', ref, filePath);
     if (!mounted || mounted.projectId !== pid || !d.file || d.file.path !== filePath) return;
-    const canEdit = !!(data && !data.binary && !data.dataUrl && !data.truncated);
+    const canEdit = !refParts(ref).readOnly && !!(data && !data.binary && !data.dataUrl && !data.truncated);
     d.file = { path: data.path || filePath, name: fname, loading: false, error: '', data, editing: edit && canEdit, draft: edit && canEdit ? data.content : '', saving: false };
   } catch (e) {
     if (!mounted || mounted.projectId !== pid || !d.file || d.file.path !== filePath) return;
@@ -393,7 +403,7 @@ function build() {
   const body = h('div', { class: 'files-body' }, left, splitter, right);
 
   // Drag & drop files from Finder / Explorer onto the left pane to upload into the current directory.
-  const isFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+  const isFiles = (e) => !refParts(curState()?.ref).readOnly && [...(e.dataTransfer?.types || [])].includes('Files');
   left.addEventListener('dragover', (e) => { if (!isFiles(e)) return; e.preventDefault(); list.classList.add('drop-files'); });
   left.addEventListener('dragleave', (e) => { if (!left.contains(e.relatedTarget)) list.classList.remove('drop-files'); });
   left.addEventListener('drop', (e) => {
@@ -420,36 +430,40 @@ function drawToolbar() {
   clear(toolbar);
   clear(banner);
 
-  const [pid, hid] = String(d.ref).split('@');
-  const onHost = hid ? mounted.ctx.S.config.hosts.find((x) => x.id === hid) : null;
+  const { pid, hostId, volName, readOnly } = refParts(d.ref);
+  const onHost = hostId ? mounted.ctx.S.config.hosts.find((x) => x.id === hostId) : null;
   const pathInput = h('input', {
     class: 'mono files-path-input',
     value: (d.cur && d.cur.path) || '',
-    placeholder: 'Directory path…',
+    placeholder: volName ? 'Volume path…' : 'Directory path…',
     onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); loadDir(pathInput.value.trim()); } },
   });
 
   const btn = (label, title, onclick, cls = '') => h('button', { class: cls, title, onclick }, label);
+  const resetToProject = () => { d.ref = pid; d.cur = null; d.file = null; loadDir(''); };
   toolbar.append(...[
     btn('↑', 'Parent folder', () => d.cur && loadDir(parentDir(d.cur.path))),
-    btn('⌂', onHost ? `Workspace folder of ${onHost.name}` : 'Project folder', () => loadDir('')),
+    btn('⌂', volName ? `Root of volume ${volName}` : onHost ? `Workspace folder of ${onHost.name}` : 'Project folder', () => loadDir(volName ? '/' : '')),
+    volName ? h('span', { class: 'tag files-host-tag', title: `Browsing Docker volume ${volName} (read-only)` },
+      `🐳 ${volName} · read-only`,
+      h('span', { class: 'files-host-reset', title: 'Back to project folder', onclick: resetToProject }, ' ×')) : null,
     onHost ? h('span', { class: 'tag files-host-tag', title: `Browsing host ${onHost.name}` },
       `⇄ ${onHost.name}`,
       pid !== '__hosts__' ? h('span', {
         class: 'files-host-reset',
         title: 'Switch back to project machine',
-        onclick: () => { d.ref = pid; d.cur = null; d.file = null; loadDir(''); },
+        onclick: resetToProject,
       }, ' ×') : null) : null,
     pathInput,
     btn('.*', d.showHidden ? 'Hide dotfiles' : 'Show dotfiles', () => { d.showHidden = !d.showHidden; drawToolbar(); drawList(); }, d.showHidden ? 'active' : ''),
     btn('⟳', 'Refresh folder', () => loadDir(d.cur ? d.cur.path : '')),
     h('span', { class: 'files-sep' }),
-    btn('Upload…', 'Upload files from this computer into this folder (or drag & drop)', async () => uploadPaths(await call('filesPickUpload'))),
+    !readOnly ? btn('Upload…', 'Upload files from this computer into this folder (or drag & drop)', async () => uploadPaths(await call('filesPickUpload'))) : null,
     btn('Download', 'Download selected files/folders (or the open file)', () => {
       const sel = d.cur ? d.cur.entries.filter((e) => d.selected.has(e.name)) : [];
       downloadEntries(sel);
     }),
-    btn('New folder…', 'Create a new folder here', createFolder),
+    !readOnly ? btn('New folder…', 'Create a new folder here', createFolder) : null,
   ].filter(Boolean));
 
   if (d.dirErr) {
@@ -515,16 +529,19 @@ function drawList() {
         ev.preventDefault();
         if (!d.selected.has(e.name)) { d.selected = new Set([e.name]); drawList(); }
         const sel = d.cur.entries.filter((x) => d.selected.has(x.name));
+        const { readOnly } = refParts(d.ref);
         contextMenu(ev.clientX, ev.clientY, [
           e.type === 'dir'
             ? { label: 'Open folder', action: () => loadDir(full) }
             : { label: 'View file', action: () => openFile(full, e.name) },
-          ...(e.type === 'file' ? [{ label: 'Edit file', action: () => openFile(full, e.name, { edit: true }) }] : []),
+          ...(!readOnly && e.type === 'file' ? [{ label: 'Edit file', action: () => openFile(full, e.name, { edit: true }) }] : []),
           { label: sel.length > 1 ? `Download ${sel.length} items…` : 'Download…', action: () => downloadEntries(sel) },
           { label: 'Copy path', action: () => { navigator.clipboard?.writeText(full); toast('Path copied'); } },
-          '-',
-          { label: 'Upload here…', action: async () => uploadPaths(await call('filesPickUpload')) },
-          { label: 'New folder…', action: createFolder },
+          ...(!readOnly ? [
+            '-',
+            { label: 'Upload here…', action: async () => uploadPaths(await call('filesPickUpload')) },
+            { label: 'New folder…', action: createFolder },
+          ] : []),
         ]);
       },
     },
@@ -534,9 +551,10 @@ function drawList() {
   }));
 
   list.appendChild(listEl);
+  const { readOnly } = refParts(d.ref);
   foot.append(
     h('span', null, d.selected.size ? `${d.selected.size} selected` : `${visible.length} item${visible.length === 1 ? '' : 's'}`),
-    h('span', { class: 'muted' }, 'Drop files to upload'));
+    h('span', { class: 'muted' }, readOnly ? 'Read-only volume' : 'Drop files to upload'));
 }
 
 function drawViewer() {
@@ -560,7 +578,8 @@ function drawViewer() {
   const isMd = fmt.id === 'markdown';
   const isSvg = fmt.id === 'xml' && f.name.toLowerCase().endsWith('.svg');
   const isJson = fmt.id === 'json' && f.name.toLowerCase().endsWith('.json');
-  const canEdit = !!(data && !data.binary && !data.dataUrl && !data.truncated);
+  const { readOnly } = refParts(d.ref);
+  const canEdit = !readOnly && !!(data && !data.binary && !data.dataUrl && !data.truncated);
   const isEditing = !!(f.editing && canEdit);
   const isDirty = isEditing && f.draft !== data.content;
   const activeText = isEditing ? f.draft : (data ? data.content : '');

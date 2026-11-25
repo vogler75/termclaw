@@ -815,3 +815,30 @@ test('sessions: default shell terminals are numbered starting at shell-1', () =>
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('web: token persistence, export exclusion, cookie parsing, and index HTML bridge injection', () => {
+  const { parseCookies, renderIndexHtml, WebServer } = require('../src/main/web');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'termclaw-web-'));
+  const st = new Store(dir);
+  try {
+    const t1 = st.getWebToken();
+    assert.ok(t1.length >= 32);
+    assert.strictEqual(st.getWebToken(), t1);
+    const exported = JSON.parse(st.exportJson());
+    assert.strictEqual('webToken' in exported, false);
+    const t2 = st.regenerateWebToken();
+    assert.notStrictEqual(t2, t1);
+
+    assert.deepStrictEqual(parseCookies('a=1; termclaw_web=abc%20123; b=2'), { a: '1', termclaw_web: 'abc 123', b: '2' });
+    const html = renderIndexHtml();
+    assert.match(html, /<script src="\/web-bridge\.js"><\/script>/);
+    assert.match(html, /href="\/dist\/renderer\.css"/);
+    assert.match(html, /connect-src 'self'/);
+
+    const ws = new WebServer({ store: st, api: {}, overrides: { enabled: true, port: 47999, bind: '0.0.0.0' } });
+    assert.deepStrictEqual(ws.effectiveConfig(), { enabled: true, port: 47999, bind: '0.0.0.0' });
+  } finally {
+    clearTimeout(st._timer);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

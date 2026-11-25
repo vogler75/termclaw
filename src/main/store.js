@@ -44,6 +44,14 @@ const DEFAULT_SETTINGS = {
     // MCP URL as clients reach it through a reverse proxy / tunnel, e.g. https://termclaw.example.com/mcp
     publicUrl: '',
   },
+  // Web UI server & background / tray mode (for local browser automation or remote access).
+  web: {
+    enabled: false,
+    port: 47901,
+    bind: '127.0.0.1',
+    background: false, // keep running in the system tray / menu bar when the window is closed
+    startHidden: false, // start directly in the background without opening a native window
+  },
 };
 
 const PROJECT_DEFAULTS = {
@@ -116,7 +124,12 @@ function normalize(data) {
   const d = data && typeof data === 'object' ? data : {};
   return {
     version: 1,
-    settings: { ...DEFAULT_SETTINGS, ...(d.settings || {}), mcp: { ...DEFAULT_SETTINGS.mcp, ...((d.settings || {}).mcp || {}) } },
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...(d.settings || {}),
+      mcp: { ...DEFAULT_SETTINGS.mcp, ...((d.settings || {}).mcp || {}) },
+      web: { ...DEFAULT_SETTINGS.web, ...((d.settings || {}).web || {}) },
+    },
     hosts: (d.hosts || []).map(normalizeHost),
     // Standalone terminals opened directly to a configured host (without a project); restored on start.
     hostSessions: Array.isArray(d.hostSessions) ? d.hostSessions : [],
@@ -138,6 +151,8 @@ function normalize(data) {
     // Stored ssh passwords, encrypted (secrets.js), keyed 'host:<id>' or 'project:<id>'. Machine-local:
     // never sent to the renderer, never exported.
     credentials: d.credentials && typeof d.credentials === 'object' ? d.credentials : {},
+    // Machine-local access token for the Web UI server; never exported.
+    webToken: typeof d.webToken === 'string' ? d.webToken : '',
   };
 }
 
@@ -196,9 +211,24 @@ class Store extends EventEmitter {
 
   updateSettings(patch) {
     const mcp = { ...this.data.settings.mcp, ...(patch.mcp || {}) };
-    this.data.settings = { ...this.data.settings, ...patch, mcp };
+    const web = { ...this.data.settings.web, ...(patch.web || {}) };
+    this.data.settings = { ...this.data.settings, ...patch, mcp, web };
     this.save();
     return this.data.settings;
+  }
+
+  getWebToken() {
+    if (!this.data.webToken) {
+      this.data.webToken = crypto.randomBytes(24).toString('hex');
+      this.save();
+    }
+    return this.data.webToken;
+  }
+
+  regenerateWebToken() {
+    this.data.webToken = crypto.randomBytes(24).toString('hex');
+    this.save();
+    return this.data.webToken;
   }
 
   // Projects
@@ -326,7 +356,7 @@ class Store extends EventEmitter {
   // Import / export
   exportJson() {
     // tokens and stored passwords are machine-local secrets, not exported
-    const { tokens, oauthClients, oauthGrants, credentials, ...rest } = this.data;
+    const { tokens, oauthClients, oauthGrants, credentials, webToken, ...rest } = this.data;
     return JSON.stringify(stripSecrets(rest), null, 2);
   }
   importJson(text, { merge = false } = {}) {
@@ -347,6 +377,7 @@ class Store extends EventEmitter {
       incoming.oauthClients = this.data.oauthClients;
       incoming.oauthGrants = this.data.oauthGrants;
       incoming.credentials = this.data.credentials;
+      incoming.webToken = this.data.webToken;
       this.data = incoming;
     }
     if (this.data.settings.sortProjectsByName) this._sortProjects();

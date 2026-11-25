@@ -736,6 +736,61 @@ export function appendAudit(ctx, e) {
   if (tb) tb.insertBefore(auditRow(e), tb.firstChild);
 }
 
+// Quick modal from the sidebar globe button to toggle Web UI & background tray mode without restarting.
+export function openWebDialog(ctx) {
+  const { S, call } = ctx;
+  const wcfg = (S.config.settings && S.config.settings.web) || {};
+  const wst = S.web || {};
+  const wEnabled = h('input', { type: 'checkbox', checked: !!wcfg.enabled });
+  const wBg = h('input', { type: 'checkbox', checked: !!wcfg.background });
+  const wHidden = h('input', { type: 'checkbox', checked: !!wcfg.startHidden });
+  const wBind = h('select', null,
+    h('option', { value: '127.0.0.1', selected: (wcfg.bind || '127.0.0.1') === '127.0.0.1' }, 'This computer only (127.0.0.1)'),
+    h('option', { value: '0.0.0.0', selected: wcfg.bind === '0.0.0.0' }, 'Remote / LAN / Tailscale (0.0.0.0)'),
+    ...(wcfg.bind && wcfg.bind !== '127.0.0.1' && wcfg.bind !== '0.0.0.0' ? [h('option', { value: wcfg.bind, selected: true }, wcfg.bind)] : []));
+  const wPort = h('input', { type: 'number', value: wcfg.port || 47901, min: 1, max: 65535 });
+  // Turning on Web UI defaults background mode on if it was off, so closing the window keeps it running.
+  wEnabled.addEventListener('change', () => { if (wEnabled.checked && !wBg.checked) wBg.checked = true; });
+
+  const statusLine = h('div', { class: 'row', style: { marginBottom: '10px', flexWrap: 'wrap' } },
+    wst.running
+      ? h('span', { class: 'tag ok' }, `Running on ${wst.bind}:${wst.port}`)
+      : wst.error
+        ? h('span', { class: 'tag bad', title: wst.error }, `Error: ${wst.error}`)
+        : h('span', { class: 'tag' }, 'Stopped'),
+    wst.running ? h('button', { onclick: () => { navigator.clipboard?.writeText(wst.loginUrl); toast('Sign-in URL copied'); } }, 'Copy URL') : null,
+    wst.running ? h('button', { onclick: () => call('openExternal', wst.loginUrl) }, 'Open in browser') : null);
+
+  modal({
+    title: 'Web interface & background mode',
+    width: '540px',
+    body: h('div', null,
+      statusLine,
+      h('p', { class: 'muted', style: { marginTop: 0 } }, 'Changes apply immediately — no restart required. When background mode is enabled, closing TermClaw keeps it running in the taskbar / menu bar tray.'),
+      h('div', { class: 'form' },
+        field('Enable Web UI', h('label', { class: 'row' }, wEnabled, 'Serve TermClaw in a browser (token-protected)')),
+        field('Access', wBind),
+        field('Port', wPort),
+        field('Background tray', h('label', { class: 'row' }, wBg, 'Keep running in the taskbar / menu bar when window is closed')),
+        field('Start hidden', h('label', { class: 'row' }, wHidden, 'Start minimized in the background on next launch')))),
+    okText: 'Apply',
+    onOk: async () => {
+      await call('updateSettings', {
+        web: {
+          enabled: wEnabled.checked,
+          bind: wBind.value,
+          port: Number(wPort.value) || 47901,
+          background: wBg.checked,
+          startHidden: wHidden.checked,
+        },
+      });
+      S.web = await call('webStatus');
+      await reloadConfig(ctx);
+      toast(S.web.running ? `Web UI running on ${S.web.url}` : 'Web UI settings saved');
+    },
+  });
+}
+
 // ---------- settings ----------
 export function renderSettings(ctx, main) {
   const { S, call } = ctx;
@@ -780,6 +835,59 @@ export function renderSettings(ctx, main) {
           await reloadConfig(ctx);
           toast('Saved');
         } }, 'Save')))),
+    (() => {
+      const wcfg = st.web || {};
+      const wst = S.web || {};
+      const wEnabled = h('input', { type: 'checkbox', checked: !!wcfg.enabled });
+      const wPort = h('input', { type: 'number', value: wcfg.port || 47901, min: 1, max: 65535 });
+      const wBind = h('input', { value: wcfg.bind || '127.0.0.1', placeholder: '127.0.0.1 or 0.0.0.0' });
+      const wBg = h('input', { type: 'checkbox', checked: !!wcfg.background });
+      const wHidden = h('input', { type: 'checkbox', checked: !!wcfg.startHidden });
+      const statusBadge = wst.running
+        ? h('span', { class: 'tag ok' }, `Running on ${wst.bind}:${wst.port}`)
+        : wst.error
+          ? h('span', { class: 'tag bad', title: wst.error }, `Error: ${wst.error}`)
+          : h('span', { class: 'tag' }, 'Stopped');
+      const maskedTok = wst.token ? `${wst.token.slice(0, 6)}••••••••••••${wst.token.slice(-4)}` : '—';
+      return h('div', { class: 'card' },
+        h('div', { class: 'row', style: { marginBottom: '10px' } },
+          h('h2', { style: { margin: 0 } }, 'Web interface & background mode'),
+          statusBadge,
+          wst.cliOverride ? h('span', { class: 'tag warn', title: 'Enabled via CLI flag or TERMCLAW_WEB env var' }, 'CLI override') : null),
+        h('p', { class: 'muted', style: { marginTop: 0 } }, 'Serve the full TermClaw UI over HTTP so you can access terminals, File Explorer, Git, Docker, Monitor and agents from any browser (locally or remotely over LAN / Tailscale / reverse proxy).'),
+        h('div', { class: 'form' },
+          field('Enable Web UI', h('label', { class: 'row' }, wEnabled, 'Start the built-in HTTP + SSE web server')),
+          field('Bind address', wBind, '127.0.0.1 = this computer only. 0.0.0.0 = reachable from other devices on your network / Tailscale (always protected by the access token).'),
+          field('Port', wPort),
+          field('Background mode', h('label', { class: 'row' }, wBg, 'Keep TermClaw running in the system tray / menu bar when the window is closed')),
+          field('Start hidden', h('label', { class: 'row' }, wHidden, 'Start directly in the background without opening the desktop window (or launch with --headless --web)')),
+          field('Access token', h('div', { class: 'row', style: { flexWrap: 'wrap' } },
+            h('code', { class: 'mono', style: { padding: '4px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius)' } }, maskedTok),
+            h('button', { disabled: !wst.token, onclick: () => { navigator.clipboard?.writeText(wst.token); toast('Access token copied'); } }, 'Copy token'),
+            wst.running ? h('button', { onclick: () => { navigator.clipboard?.writeText(wst.loginUrl); toast('Sign-in URL copied'); } }, 'Copy URL') : null,
+            wst.running ? h('button', { onclick: () => call('openExternal', wst.loginUrl) }, 'Open in browser') : null,
+            h('button', { onclick: async () => {
+              if (!await confirmDialog('Regenerate token', 'Create a new Web UI access token? Existing browser sessions will need to sign in again.', 'Regenerate')) return;
+              S.web = await call('webRegenerateToken');
+              toast('New Web UI token generated');
+              ctx.render();
+            } }, 'Regenerate')),
+            'Required to sign in from any browser. Stored only on this computer and never exported.'),
+          h('div', { class: 'full row' }, h('div', { class: 'spacer' }), h('button', { class: 'primary', onclick: async () => {
+            await call('updateSettings', {
+              web: {
+                enabled: wEnabled.checked,
+                bind: wBind.value.trim() || '127.0.0.1',
+                port: Number(wPort.value) || 47901,
+                background: wBg.checked,
+                startHidden: wHidden.checked,
+              },
+            });
+            S.web = await call('webStatus');
+            await reloadConfig(ctx);
+            toast('Web UI settings saved');
+          } }, 'Save Web UI settings'))));
+    })(),
     h('div', { class: 'card' },
       h('h2', null, 'Configuration'),
       h('p', { class: 'muted' }, 'Projects, hosts and orchestrators are stored as JSON in the data folder (config.json). Tokens are not exported.'),

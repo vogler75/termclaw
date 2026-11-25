@@ -20,6 +20,7 @@ export const S = {
   hosts: [],
   forwards: {},
   mcp: {},
+  web: {},
   tokens: [],
   orchestrators: [],
   schedules: [],
@@ -333,6 +334,7 @@ const ICONS = {
   hosts: svgIcon('<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>'),
   orch: svgIcon('<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>'),
   mcp: svgIcon('<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>'),
+  web: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a14 14 0 0 0 0 18M12 3a14 14 0 0 1 0 18"/>'),
   sched: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
   library: svgIcon('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>'),
   audit: svgIcon('<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>'),
@@ -488,6 +490,12 @@ function renderSidebar() {
   sb.appendChild(h('div', { class: 'sb-bottom' },
     bottomBtn('settings', 'settings', 'Settings'),
     bottomBtn('mcp', 'mcp', 'MCP', `MCP (${S.mcp.running ? 'running' : 'stopped'})`, S.mcp.running ? h('span', { class: 'sb-util-dot running' }) : null),
+    h('button', {
+      class: 'icon sb-util',
+      title: S.web && S.web.running ? `Web UI (running on ${S.web.bind}:${S.web.port})` : 'Web UI & background mode (stopped)',
+      'aria-label': 'Web UI & background mode',
+      onclick: () => pages.openWebDialog(ctx),
+    }, icon('web'), h('span', { class: 'sr-only' }, 'Web UI'), S.web && S.web.running ? h('span', { class: 'sb-util-dot running' }) : null),
     bottomBtn('library', 'library', 'Library', libCount ? `Library (${libCount})` : 'Library'),
     bottomBtn('audit', 'audit', 'Audit log'),
     h('div', { class: 'sb-version', title: 'Version and data folder: Settings', onclick: () => showView('settings') }, `TermClaw ${S.version ? 'v' + S.version : ''}`)));
@@ -1099,6 +1107,7 @@ on('hosts:status', (snap) => { S.hosts = snap; if (S.view === 'hosts') pages.ren
 on('forwards:status', (snap) => { S.forwards = snap; if (S.view === 'project') renderSoon(); });
 on('audit:entry', (e) => { S.audit.push(e); if (S.audit.length > 1000) S.audit.shift(); if (S.view === 'audit') pages.appendAudit(ctx, e); });
 on('mcp:status', (st) => { S.mcp = st; renderSoon(); });
+on('web:status', (st) => { S.web = st; renderSidebar(); if (S.view === 'settings') renderSoon(); });
 on('oauth:request', (r) => pages.oauthApproval(ctx, r));
 on('oauth:decided', ({ id }) => pages.oauthDecided(ctx, id));
 on('config:changed', (cfg) => {
@@ -1130,6 +1139,7 @@ export const ctx = { S, call, render, renderSoon, showView, showExtra, showFiles
   S.hosts = st.hosts;
   S.forwards = st.forwards;
   S.mcp = st.mcp;
+  S.web = st.web || {};
   S.tokens = st.tokens;
   S.orchestrators = st.orchestrators;
   S.templates = st.templates;

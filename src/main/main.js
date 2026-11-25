@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, shell, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, dialog, Menu, Tray, nativeImage, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { Store, HOSTS_PROJECT_ID } = require('./store');
@@ -17,7 +17,8 @@ const { AuditLog } = require('./audit');
 const { McpService } = require('./mcp');
 const { OrchestratorManager } = require('./orchestrators');
 const { ScheduleManager } = require('./schedules');
-const { filesFor, LocalFiles } = require('./files');
+const { WebServer } = require('./web');
+const { filesFor, dockerVolumeFilesFor, LocalFiles } = require('./files');
 const { findOpencode } = require('./opencode');
 const { AgentSetup } = require('./coding-agents/deploy');
 const { SkillsRepo } = require('./coding-agents/skills');
@@ -44,10 +45,30 @@ if (!process.env.TERMCLAW_USER_DATA && !app.requestSingleInstanceLock()) {
 }
 
 let win = null;
-let store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules;
+let tray = null;
+let bgNotified = false;
+let store, sessions, hosts, forwards, docker, monitor, git, audit, mcp, orchestrators, schedules, web;
+
+// CLI / environment overrides for Web UI & headless/background startup.
+function parseCliWeb() {
+  const argv = process.argv.slice(1);
+  const flag = (name) => argv.includes(name);
+  const val = (prefix) => {
+    const hit = argv.find((a) => a.startsWith(prefix + '='));
+    return hit ? hit.slice(prefix.length + 1) : '';
+  };
+  const port = val('--web-port') || process.env.TERMCLAW_WEB_PORT || '';
+  const bind = val('--web-bind') || process.env.TERMCLAW_WEB_BIND || '';
+  const enabled = flag('--web') || process.env.TERMCLAW_WEB === '1' || !!port ? true : null;
+  const headless = flag('--headless') || flag('--background') || process.env.TERMCLAW_HEADLESS === '1';
+  return { overrides: { enabled, port: port ? Number(port) : null, bind: bind || null }, headless };
+}
+const CLI_WEB = parseCliWeb();
+const isBackgroundMode = () => CLI_WEB.headless || !!(store && store.settings.web && (store.settings.web.background || store.settings.web.startHidden));
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send('event', { channel, payload });
+  if (web) web.broadcast(channel, payload);
 }
 
 // Batch terminal output per session to keep IPC traffic low.
@@ -95,6 +116,7 @@ function setup() {
   mcp = new McpService({ store, sessions, hosts, audit });
   orchestrators = new OrchestratorManager({ store, sessions, mcp, audit, dataDir, notify: (t, b) => notify(t, b) });
   schedules = new ScheduleManager({ store, sessions, orchestrators, audit, notify: (t, b) => notify(t, b, () => send('show-view', { view: 'sched' })) });
+  web = new WebServer({ store, api, audit, overrides: CLI_WEB.overrides });
 
   sessions.on('data', (s, d) => queueData(s.id, d));
   sessions.on('opened', (s) => send('session:opened', s.info()));
@@ -143,9 +165,20 @@ function setup() {
 let activeSessionId = null;
 
 function publicConfig() {
-  const { tokens, oauthClients, oauthGrants, mcpLibrary, credentials, ...rest } = store.data;
-  // MCP secrets and ssh passwords stay in the main process; the renderer only sees which ones exist.
+  const { tokens, oauthClients, oauthGrants, mcpLibrary, credentials, webToken, ...rest } = store.data;
+  // MCP secrets, ssh passwords and the Web UI token stay in the main process; the renderer only sees which ones exist.
   return { ...rest, mcpLibrary: mcpLibrary.map(({ secrets: s, ...e }) => ({ ...e, ...secretKeys(s) })), storedPasswords: Object.keys(credentials) };
+}
+
+function webStatusInfo() {
+  const tok = web ? web.token() : '';
+  const st = web ? web.status : { running: false, url: '', bind: '127.0.0.1', port: 47901, error: '' };
+  return {
+    ...st,
+    token: tok,
+    loginUrl: st.url ? `${st.url}/?token=${tok}` : '',
+    cliOverride: CLI_WEB.overrides.enabled != null,
+  };
 }
 
 function storedPassword(key) {
@@ -164,11 +197,17 @@ function fileProject(ref) {
 }
 
 function projectFiles(ref) {
-  const [projectId, hostId] = String(ref).split('@');
+  const s = String(ref);
+  const at = s.indexOf('@');
+  const projectId = at >= 0 ? s.slice(0, at) : s;
+  const target = at >= 0 ? s.slice(at + 1) : '';
   const p = store.getSessionProject(projectId);
   if (!p) throw new Error('unknown project');
-  if (hostId) {
-    const host = store.getHost(hostId);
+  if (target.startsWith('vol:')) {
+    return dockerVolumeFilesFor(p, p.hostId ? store.getHost(p.hostId) : null, target.slice(4));
+  }
+  if (target) {
+    const host = store.getHost(target);
     if (!host) throw new Error('unknown host');
     return filesFor(hostSessionProject(p, host), host);
   }
@@ -201,6 +240,7 @@ const api = {
     hosts: hosts.snapshot(),
     forwards: forwards.snapshot(),
     mcp: mcp.status,
+    web: webStatusInfo(),
     tokens: mcp.listTokens(),
     orchestrators: orchestrators.list(),
     templates: orchestrators.templates(),
@@ -435,12 +475,26 @@ const api = {
   schedPreview: (cron) => schedules.preview(cron),
 
   // settings, import/export
+  webStatus: () => webStatusInfo(),
+  webRegenerateToken: () => {
+    store.regenerateWebToken();
+    const info = webStatusInfo();
+    send('web:status', info);
+    syncTray();
+    return info;
+  },
   updateSettings: async (patch) => {
     // Only listener changes need a restart; permissions and OAuth settings are read per request.
     const listener = (m) => JSON.stringify([m.enabled, m.port, m.bind]);
-    const prev = listener(store.settings.mcp);
+    const prevMcp = listener(store.settings.mcp);
+    const prevWeb = listener(store.settings.web || {});
     const s = store.updateSettings(patch);
-    if (listener(s.mcp) !== prev) await mcp.restart();
+    if (listener(s.mcp) !== prevMcp) await mcp.restart();
+    if (listener(s.web || {}) !== prevWeb) {
+      await web.restart();
+      send('web:status', webStatusInfo());
+    }
+    syncTray();
     return s;
   },
   exportConfig: async () => {
@@ -737,6 +791,13 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.on('close', () => {
+    if (!quitting && isBackgroundMode() && !bgNotified) {
+      bgNotified = true;
+      const info = webStatusInfo();
+      notify('TermClaw is running in the background', info.running ? `Web UI is available at ${info.url}. Click the tray icon to reopen.` : 'Click the tray icon in the taskbar to reopen or quit.');
+    }
+  });
   win.on('closed', () => { win = null; });
   // If the renderer dies, sessions keep running in this process: log why and reload the window,
   // which restores all terminals from the main-process mirror.
@@ -767,7 +828,49 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+function showOrCreateWindow() {
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  } else {
+    createWindow();
+  }
+}
+
+function syncTray() {
+  const want = isBackgroundMode();
+  if (!want) {
+    if (tray) { try { tray.destroy(); } catch {} tray = null; }
+    return;
+  }
+  if (!tray) {
+    try {
+      const size = process.platform === 'darwin' ? 18 : 16;
+      const img = nativeImage.createFromPath(path.join(__dirname, 'icon.png')).resize({ width: size, height: size });
+      tray = new Tray(img);
+      tray.setToolTip('TermClaw — click to open');
+      if (process.platform === 'win32') tray.on('click', showOrCreateWindow);
+      tray.on('double-click', showOrCreateWindow);
+    } catch (e) {
+      console.error('[termclaw] tray unavailable:', e.message);
+      return;
+    }
+  }
+  const info = webStatusInfo();
+  const items = [
+    { label: 'Show TermClaw', click: showOrCreateWindow },
+    ...(info.running ? [
+      { label: `Open Web UI (${info.url})`, click: () => shell.openExternal(info.loginUrl) },
+      { label: 'Copy Web UI URL (with token)', click: () => clipboard.writeText(info.loginUrl) },
+    ] : []),
+    { type: 'separator' },
+    { label: 'Quit TermClaw', click: () => app.quit() },
+  ];
+  tray.setContextMenu(Menu.buildFromTemplate(items));
+}
+
+app.on('second-instance', showOrCreateWindow);
 
 app.whenReady().then(async () => {
   // Windows takes the taskbar icon from the Start menu shortcut with the window's app ID, and Electron
@@ -776,11 +879,22 @@ app.whenReady().then(async () => {
   if (process.platform === 'win32') app.setAppUserModelId(app.isPackaged ? 'com.vogler.termclaw' : 'com.vogler.termclaw.dev');
   setup();
   buildMenu();
-  createWindow();
   await mcp.start();
-  win.webContents.once('did-finish-load', () => {
+  await web.start();
+  if (web.status.running) {
+    const info = webStatusInfo();
+    console.log(`[termclaw] Web UI listening on ${info.loginUrl}`);
+  }
+  syncTray();
+  const startHidden = CLI_WEB.headless || !!(store.settings.web && store.settings.web.startHidden);
+  if (startHidden) {
     if (process.env.TERMCLAW_NO_RESTORE !== '1') sessions.restoreAll();
-  });
+  } else {
+    createWindow();
+    win.webContents.once('did-finish-load', () => {
+      if (process.env.TERMCLAW_NO_RESTORE !== '1') sessions.restoreAll();
+    });
+  }
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
@@ -788,6 +902,7 @@ let quitting = false;
 app.on('before-quit', () => {
   if (quitting) return;
   quitting = true;
+  if (tray) { try { tray.destroy(); } catch {} tray = null; }
   try { schedules.stop(); } catch {}
   try { orchestrators.shutdown(); } catch {}
   try { forwards.shutdown(); } catch {}
@@ -795,10 +910,13 @@ app.on('before-quit', () => {
   try { monitor.shutdown(); } catch {}
   try { hosts.stop(); } catch {}
   try { sessions.shutdown(); } catch {}
+  try { web.stop(); } catch {}
   try { mcp.stop(); } catch {}
   try { store.saveNow(); } catch {}
 });
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin' && !isBackgroundMode()) app.quit();
+});
 
 module.exports = { api };

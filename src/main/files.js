@@ -331,13 +331,153 @@ class LocalFiles {
   }
 }
 
+function validVolumeName(name) {
+  return typeof name === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name);
+}
+
+// Maps a virtual path inside a Docker volume ("/", "/sub/file") to "/vol" or "/vol/sub/file", preventing escape.
+function volumeInnerPath(rel) {
+  const norm = path.posix.normalize('/' + String(rel || '').replace(/\\/g, '/'));
+  const clean = norm.replace(/^\/+/, '');
+  return clean ? '/vol/' + clean : '/vol';
+}
+
+function volumeVirtPath(abs) {
+  const s = String(abs || '').replace(/\/+$/, '');
+  if (!s || s === '/vol') return '/';
+  return s.startsWith('/vol/') ? s.slice(4) : '/';
+}
+
+// Read-only browser for a Docker volume on the project's machine (local macOS/Linux, SSH, or WSL).
+// Mounts the volume read-only (-v <vol>:/vol:ro) inside a tiny POSIX shell image (busybox or alpine).
+class DockerVolumeFiles {
+  constructor(project, host, volumeName) {
+    if (!validVolumeName(volumeName)) throw new Error('Invalid Docker volume name');
+    this.project = project;
+    this.host = host;
+    this.volumeName = volumeName;
+    this.readOnly = true;
+    this.label = `volume ${volumeName}`;
+  }
+
+  _runInVol(innerScript, { stdout, timeout = 60000 } = {}) {
+    const cli = ((this.project.docker && this.project.docker.command) || 'docker').trim().split(/\s+/);
+    const cliStr = cli.map(shq).join(' ');
+    const wrap = `img=""
+for c in busybox alpine; do
+  if ${cliStr} image inspect "$c" >/dev/null 2>&1; then img="$c"; break; fi
+done
+[ -n "$img" ] || img=alpine
+exec ${cliStr} run --rm -i --entrypoint sh -v ${shq(this.volumeName + ':/vol:ro')} "$img" -c ${shq(innerScript)}`;
+    let spec;
+    if (this.project.type === 'ssh' || this.project.type === 'wsl') {
+      spec = buildRemoteExec(this.project, this.host, wrap);
+    } else if (IS_WIN) {
+      throw new Error('Browsing local Windows Docker volumes is not supported directly; use a WSL or Linux SSH project.');
+    } else {
+      const env = process.platform === 'darwin' ? { PATH: `${process.env.PATH || ''}:/usr/local/bin:/opt/homebrew/bin` } : undefined;
+      spec = { file: '/bin/sh', args: ['-c', wrap], env };
+    }
+    return new Promise((resolve, reject) => {
+      const p = spawn(spec.file, spec.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: specEnv(spec) });
+      const out = [];
+      let err = '';
+      let timer = timeout ? setTimeout(() => { p.kill(); reject(new Error('timed out')); }, timeout) : null;
+      const touch = () => { if (timer) { clearTimeout(timer); timer = setTimeout(() => { p.kill(); reject(new Error('timed out')); }, timeout); } };
+      if (stdout) { p.stdout.on('data', touch); p.stdout.pipe(stdout, { end: false }); } else p.stdout.on('data', (d) => out.push(d));
+      p.stderr.on('data', (d) => (err += d));
+      p.on('error', (e) => { clearTimeout(timer); reject(new Error(/ENOENT/.test(e.message) ? `${spec.file} not found` : e.message)); });
+      p.on('close', (code) => {
+        clearTimeout(timer);
+        const text = Buffer.concat(out).toString('utf8');
+        if (code === 0) resolve(text);
+        else reject(new Error(cleanErr(err) || `exit code ${code}`));
+      });
+    });
+  }
+
+  async home() { return '/'; }
+
+  async list(dir) {
+    const inner = volumeInnerPath(dir);
+    const parsed = parseList(await this._runInVol(LIST_SCRIPT(shq(inner))));
+    return { path: volumeVirtPath(parsed.path), entries: parsed.entries };
+  }
+
+  async read(filePath, { maxBytes } = {}) {
+    if (!filePath || typeof filePath !== 'string') throw new Error('File path is missing');
+    const inner = volumeInnerPath(filePath);
+    const virt = volumeVirtPath(inner);
+    const mime = imageMime(virt);
+    const limit = maxBytes || (mime ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES);
+    const out = await this._runInVol(READ_SCRIPT(inner, limit), { timeout: 60000 });
+    const nl = out.indexOf('\n');
+    const size = Number((nl >= 0 ? out.slice(0, nl) : out).trim()) || 0;
+    const b64 = nl >= 0 ? out.slice(nl + 1).replace(/\s+/g, '') : '';
+    const buf = b64 ? Buffer.from(b64, 'base64') : Buffer.alloc(0);
+    return buildReadResult(virt, buf, size, limit);
+  }
+
+  async download(items, localDir, { onProgress } = {}) {
+    const total = items.reduce((s, i) => s + (i.type === 'file' ? i.size || 0 : 0), 0);
+    let done = 0;
+    const tick = (n) => { done += n; onProgress && onProgress(done, Math.max(total, done)); };
+    const saved = [];
+    for (const it of items) {
+      const inner = volumeInnerPath(it.path);
+      const name = path.posix.basename(inner);
+      if (!validName(name) || inner === '/vol') throw new Error('Invalid file name ' + name);
+      if (it.type === 'dir') {
+        const tar = spawn(LOCAL_TAR, ['-xf', '-', '-C', localDir], { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+        let tarErr = '';
+        tar.stderr.on('data', (d) => (tarErr += d));
+        const closed = new Promise((res) => tar.on('close', res));
+        const c = counter(tick);
+        c.pipe(tar.stdin);
+        await this._runInVol(`cd ${shq(path.posix.dirname(inner))} && tar -cf - ${shq(name)}`, { stdout: c, timeout: 120000 });
+        c.end();
+        const code = await closed;
+        if (code !== 0) throw new Error(`${name}: ${tarErr.trim() || 'tar failed'}`);
+      } else {
+        const target = path.join(localDir, name);
+        const tmp = target + '.termclaw-part';
+        const file = fs.createWriteStream(tmp);
+        const c = counter(tick);
+        c.pipe(file);
+        try {
+          await this._runInVol(`cat ${shq(inner)}`, { stdout: c, timeout: 120000 });
+          c.end();
+          await new Promise((res, rej) => { file.on('finish', res); file.on('error', rej); });
+          fs.renameSync(tmp, target);
+        } catch (e) {
+          c.destroy(); file.destroy();
+          try { fs.unlinkSync(tmp); } catch {}
+          throw new Error(`${name}: ${e.message}`);
+        }
+      }
+      saved.push(path.join(localDir, name));
+    }
+    return { saved, bytes: done };
+  }
+
+  async exists() { return []; }
+  async mkdir() { throw new Error('Docker volumes are read-only'); }
+  async write() { throw new Error('Docker volumes are read-only'); }
+  async upload() { throw new Error('Docker volumes are read-only'); }
+}
+
 function filesFor(project, host) {
   if (windowsTarget(project)) throw new Error(windowsOnlyTerminal('The file browser'));
   return project.type === 'ssh' || project.type === 'wsl' ? new RemoteFiles(project, host) : new LocalFiles(project, host);
+}
+
+function dockerVolumeFilesFor(project, host, volumeName) {
+  if (windowsTarget(project)) throw new Error(windowsOnlyTerminal('The Docker volume browser'));
+  return new DockerVolumeFiles(project, host, volumeName);
 }
 
 function cleanErr(text) {
   return String(text || '').split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^\*\*|^Warning: Permanently added/.test(l)).slice(-3).join(' ').slice(0, 400);
 }
 
-module.exports = { filesFor, RemoteFiles, LocalFiles, parseList, LIST_SCRIPT, CWD_SCRIPT, READ_SCRIPT, MAX_TEXT_BYTES };
+module.exports = { filesFor, dockerVolumeFilesFor, RemoteFiles, LocalFiles, DockerVolumeFiles, validVolumeName, volumeInnerPath, volumeVirtPath, parseList, LIST_SCRIPT, CWD_SCRIPT, READ_SCRIPT, MAX_TEXT_BYTES };

@@ -3,7 +3,7 @@
 // volumes with removal and cleanup. Data comes from the main process,
 // which polls the Docker Engine API while this tab is visible.
 import { h, clear, toast, modal, timeAgo, contextMenu } from './ui.js';
-import { fmtSize } from './files.js';
+import { fmtSize, openBrowser } from './files.js';
 
 const call = (m, ...a) => window.termclaw.call(m, ...a);
 const HIST = 40; // samples kept for sparklines (3 s apart = 2 minutes)
@@ -225,7 +225,7 @@ function tableArea(ctx, p, snap) {
   const match = (...xs) => !q || xs.some((x) => String(x || '').toLowerCase().includes(q));
   let table;
   if (view.sub === 'images') table = imagesTable(p, df, snap, match);
-  else if (view.sub === 'volumes') table = volumesTable(p, df, snap, match);
+  else if (view.sub === 'volumes') table = volumesTable(ctx, p, df, snap, match);
   else table = containersTable(ctx, p, snap, match);
   return h('div', null, bar, progressBanner(p.id), selectionBar(p, snap, df), table);
 }
@@ -390,7 +390,7 @@ function imagesTable(p, df, snap, match) {
     }));
 }
 
-function volumesTable(p, df, snap, match) {
+function volumesTable(ctx, p, df, snap, match) {
   if (!df) return h('div', { class: 'muted', style: { padding: '16px 8px' } }, snap.df && snap.df.error ? snap.df.error : 'Loading disk usage…');
   const usedBy = (name) => snap.containers.filter((c) => c.mounts.some((m) => m.type === 'volume' && m.name === name));
   const list = sortRows(df.volumes.filter((v) => shown(v.name, snap.slowAt) && match(v.name, v.driver, v.mountpoint)), 'volumes', {
@@ -409,6 +409,7 @@ function volumesTable(p, df, snap, match) {
     list.map((v, i) => {
       const cs = usedBy(v.name);
       const b = busy.get(v.name);
+      const browse = () => openBrowser(ctx, `${p.id}@vol:${v.name}`, '/');
       return h('tr', { class: sel.volumes.has(v.name) ? 'sel' : '' },
         selCell(sel.volumes, keys, i, v.name),
         h('td', { class: 'mono dk-vol', title: v.name }, v.name, v.labels['com.docker.compose.project'] ? h('span', { class: 'tag' }, v.labels['com.docker.compose.project']) : null),
@@ -417,7 +418,9 @@ function volumesTable(p, df, snap, match) {
         h('td', null, cs.length ? cs.map((c) => h('div', { class: c.state === 'running' ? '' : 'muted' }, c.name)) : h('span', { class: 'muted' }, 'unused')),
         h('td', { class: 'muted dk-created', title: v.created ? new Date(v.created).toLocaleString() : '' }, v.created ? timeAgo(v.created) + ' ago' : ''),
         h('td', { class: 'mono muted dk-mount', title: v.mountpoint }, v.mountpoint),
-        h('td', { class: 'dk-actions' }, h('button', { class: 'icon', title: 'Remove volume', 'aria-label': 'Remove', disabled: !!b, onclick: () => removeDialog(p, 'volume', [{ id: v.name, name: v.name }]) }, '✕')));
+        h('td', { class: 'dk-actions' },
+          h('button', { class: 'icon', title: 'Browse volume contents (read-only)', disabled: !!b, onclick: browse }, 'Browse'),
+          h('button', { class: 'icon', title: 'Remove volume', 'aria-label': 'Remove', disabled: !!b, onclick: () => removeDialog(p, 'volume', [{ id: v.name, name: v.name }]) }, '✕')));
     }));
 }
 
