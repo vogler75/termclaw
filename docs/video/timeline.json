@@ -1,0 +1,100 @@
+[
+  {
+    "key": "intro",
+    "title": "What is TermClaw?",
+    "start": 0,
+    "frames": 467,
+    "text": "TermClaw is an open-source desktop app for managing multiple remote terminal sessions. Connect to different machines over SSH and run AI coding agents in parallel across projects. Review their changes, manage remote Docker containers, or open the same workspace in a browser. Let's follow a checkout worker stuck in a retry loop."
+  },
+  {
+    "key": "ssh",
+    "title": "Remote SSH sessions",
+    "start": 467,
+    "frames": 304,
+    "text": "In TermClaw, the developer, the reviewer, and the worker logs can each have their own SSH session. Tile them together. With tmux, a dropped connection doesn't interrupt the job."
+  },
+  {
+    "key": "web",
+    "title": "Background & browser",
+    "start": 771,
+    "frames": 267,
+    "text": "Close the desktop window. With background mode on, the sessions keep running. Open the token-protected web interface and pick up the same work in a browser. You can even start TermClaw hidden."
+  },
+  {
+    "key": "phone",
+    "title": "Mobile control via MCP",
+    "start": 1038,
+    "frames": 386,
+    "text": "From your phone, ask Claude to check the worker. Its connector talks to TermClaw's MCP server, finds the shared session, sends your request, and reads back the agent's findings. Claude Code, Codex, and other MCP clients can use those same tools."
+  },
+  {
+    "key": "install",
+    "title": "Coding agent setup",
+    "start": 1424,
+    "frames": 315,
+    "text": "Need another agent on a remote machine? Open the Agents menu and choose an installer. TermClaw runs the official install command in that project's terminal. Deploy the team's skills and MCP servers there, too."
+  },
+  {
+    "key": "acp",
+    "title": "ACP conversations",
+    "start": 1739,
+    "frames": 304,
+    "text": "OpenCode and GitHub Copilot also connect through the Agent Client Protocol. Open a chat, watch the tool calls arrive, inspect a proposed diff, and answer a permission request in place."
+  },
+  {
+    "key": "orch",
+    "title": "Orchestrators",
+    "start": 2043,
+    "frames": 275,
+    "text": "Give an orchestrator a developer and a reviewer to watch. When the developer finishes, its output goes to the coordinator. The coordinator can ask the reviewer to check the change, with a round limit you control."
+  },
+  {
+    "key": "files",
+    "title": "Remote file browser and transfers",
+    "start": 2318,
+    "frames": 442,
+    "text": "Open Files and browse the remote machine. Here, the checkout project has a reports folder. Open it, preview the retry report, and download a copy to your computer. Now upload the team's runbook into that same folder. Open the Markdown preview, edit the handoff note, and save it back to the host."
+  },
+  {
+    "key": "git",
+    "title": "Git review",
+    "start": 2760,
+    "frames": 290,
+    "text": "Now open Git. Choose the repository, inspect the changed lines, then select the files that belong in the commit. Branches, history, and pull request checks are close at hand."
+  },
+  {
+    "key": "docker",
+    "title": "Docker on a remote host",
+    "start": 3050,
+    "frames": 419,
+    "text": "The checkout containers run on a different machine, edge-03. Open Docker in its TermClaw project. TermClaw uses the project's SSH connection to reach the Docker engine on that Linux host. Sort its containers by CPU and open the worker's live logs."
+  },
+  {
+    "key": "restart",
+    "title": "Restart a remote container",
+    "start": 3469,
+    "frames": 275,
+    "text": "From your laptop, select Restart on the checkout worker. Watch its status on the remote host. The worker comes back up with a fresh uptime. The API and cache keep running."
+  },
+  {
+    "key": "volumes",
+    "title": "Remote containers and volumes",
+    "start": 3744,
+    "frames": 327,
+    "text": "On that same remote Docker host, open a shell inside a container, browse a volume read only, or manage several containers at once. You can also clean up unused images and volumes over SSH."
+  },
+  {
+    "key": "monitor",
+    "title": "Host monitoring",
+    "start": 4071,
+    "frames": 261,
+    "text": "Switch to Monitor to check the Linux host beneath those containers. Compare CPU and memory with disk and network activity. Sort the processes to see which one is consuming the machine."
+  },
+  {
+    "key": "end",
+    "title": "Feature checklist",
+    "start": 4332,
+    "frames": 534,
+    "text": "TermClaw brings your remote sessions, browser access, and mobile agent controls together. Install agents, coordinate reviews, move files, inspect Git changes, manage remote Docker hosts, and monitor your hosts. It's open source under the MIT license. Find TermClaw on GitHub."
+  }
+]

@@ -9,7 +9,32 @@ const HIST = 60; // samples kept for the charts (2 s apart = 2 minutes)
 
 const snaps = new Map(); // projectId -> snapshot
 const hist = new Map(); // projectId -> { cpu, mem, dr, dw, rx, tx }
-const view = { filter: '', sort: { key: 'cpu', dir: -1 }, allMounts: false };
+function loadLimit(key, allowed, def) {
+  try {
+    const raw = localStorage.getItem('monLimit:' + key) ?? (key === 'procs' ? localStorage.getItem('monProcLimit') : null);
+    if (raw != null && raw !== '') {
+      const n = Number(raw);
+      if (allowed.includes(n)) return n;
+    }
+  } catch {}
+  return def;
+}
+const view = {
+  filters: { mounts: '', disks: '', net: '', procs: '' },
+  sorts: {
+    mounts: { key: 'pct', dir: -1 },
+    disks: { key: 'util', dir: -1 },
+    net: { key: 'rxBps', dir: -1 },
+    procs: { key: 'cpu', dir: -1 },
+  },
+  allMounts: false,
+  limits: {
+    mounts: loadLimit('mounts', [5, 10, 20, 0], 10),
+    disks: loadLimit('disks', [5, 10, 20, 0], 10),
+    net: loadLimit('net', [5, 10, 20, 0], 10),
+    procs: loadLimit('procs', [10, 20, 50, 100, 0], 20),
+  },
+};
 let mounted = null; // { ctx, projectId, root }
 
 window.termclaw.on('monitor:update', ({ projectId, snap }) => {
@@ -90,18 +115,45 @@ function card(title, big, sub, ...extra) {
 
 // ---------- drawing ----------
 
-function sortTh(label, key, firstDir = -1) {
-  const active = view.sort.key === key;
+function sortTh(tableKey, label, key, firstDir = -1, cls = '') {
+  const cur = view.sorts[tableKey];
+  const active = cur.key === key;
   return h('th', {
-    class: 'dk-sortable' + (active ? ' sorted' : ''),
+    class: (cls ? cls + ' ' : '') + 'dk-sortable' + (active ? ' sorted' : ''),
     title: 'Sort by ' + label.toLowerCase(),
-    onclick: () => { view.sort = active ? { key, dir: -view.sort.dir } : { key, dir: firstDir }; draw(); },
-  }, label, h('span', { class: 'dk-arrow' }, active ? (view.sort.dir > 0 ? ' ▲' : ' ▼') : ''));
+    onclick: () => { view.sorts[tableKey] = active ? { key, dir: -cur.dir } : { key, dir: firstDir }; draw(); },
+  }, label, h('span', { class: 'dk-arrow' }, active ? (cur.dir > 0 ? ' ▲' : ' ▼') : ''));
 }
 
-const SORT_VALUE = {
-  pid: (r) => r.pid, user: (r) => r.user, cpu: (r) => r.cpu, mem: (r) => r.mem, threads: (r) => r.threads, cmd: (r) => r.cmd,
-};
+function sortBy(list, tableKey, getters, tieBreak) {
+  const { key, dir } = view.sorts[tableKey];
+  const get = getters[key] || Object.values(getters)[0];
+  return [...list].sort((a, b) => {
+    const x = get(a);
+    const y = get(b);
+    if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1;
+    const d = typeof x === 'number' && typeof y === 'number'
+      ? x - y
+      : String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
+    return d * dir || tieBreak(a, b);
+  });
+}
+
+function filterInput(tableKey, placeholder, cls = 'mon-filter-sm') {
+  return h('input', {
+    class: 'mon-filter ' + cls,
+    'data-filter': tableKey,
+    placeholder,
+    value: view.filters[tableKey] || '',
+    oninput: (e) => { view.filters[tableKey] = e.target.value; draw(); },
+  });
+}
+
+function panel(title, body, right = null) {
+  return h('section', { class: 'mon-panel' },
+    h('div', { class: 'mon-panel-head' }, h('span', { class: 'mon-panel-title' }, title), right),
+    h('div', { class: 'mon-panel-body' }, body));
+}
 
 function draw() {
   if (!mounted || !mounted.root.isConnected) return;
@@ -110,6 +162,7 @@ function draw() {
   const snap = snaps.get(projectId);
   const scroll = root.scrollTop;
   const focus = document.activeElement && document.activeElement.classList.contains('mon-filter') ? document.activeElement : null;
+  const focusKey = focus ? focus.dataset.filter : null;
   const caret = focus ? [focus.selectionStart, focus.selectionEnd] : null;
   clear(root);
   if (!p) return;
@@ -128,91 +181,170 @@ function draw() {
   const hs = hist.get(projectId) || { cpu: [], mem: [], dr: [], dw: [], rx: [], tx: [] };
   const { info, cpu, mem } = snap;
   const memUsed = mem.total - mem.available;
+  const memCache = (mem.cached || 0) + (mem.buffers || 0);
   const memRatio = mem.total ? (memUsed / mem.total) * 100 : 0;
   const sum = (l, k) => l.reduce((a, x) => a + (x[k] || 0), 0);
 
-  root.appendChild(h('div', { class: 'dk-head' },
-    h('span', { class: 'title' }, `Monitor · ${info.hostname || where}`),
-    h('span', { class: 'muted' }, where),
+  // Header
+  root.appendChild(h('div', { class: 'dk-head mon-head' },
+    h('span', { class: 'dot waiting', title: 'Live updates every 2 s' }),
+    h('span', { class: 'title' }, info.hostname || where),
+    h('span', { class: 'tag' }, where),
+    info.os ? h('span', { class: 'muted' }, info.os) : null,
+    info.uptime ? h('span', { class: 'muted' }, `· up ${fmtUptime(info.uptime)}`) : null,
     h('span', { style: { flex: 1 } }),
-    h('span', { class: 'muted' }, `updated ${new Date(snap.updatedAt).toLocaleTimeString()}`)));
+    h('span', { class: 'muted mono', style: { fontSize: '11px' } }, `updated ${new Date(snap.updatedAt).toLocaleTimeString()}`),
+    h('button', { class: 'icon', title: 'Refresh now', onclick: () => call('monitorRefresh', projectId).catch((e) => toast(e.message, { error: true })) }, '⟳')));
 
-  // Cards: CPU, memory, disk I/O, network I/O, host.
+  // Top KPI cards: CPU, Memory, Disk I/O, Network I/O
   const loadTxt = info.load ? info.load.map((x) => x.toFixed(2)).join('  ') : '–';
+  const memStacked = h('div', { class: 'dk-bar' },
+    h('span', { class: level(memRatio) || 'mem', style: { width: mem.total ? Math.min(100, (memUsed / mem.total) * 100) + '%' : '0' }, title: `Used ${fmtSize(memUsed)}` }),
+    h('span', { class: 'mem-other', style: { width: mem.total ? Math.min(100 - Math.min(100, (memUsed / mem.total) * 100), (memCache / mem.total) * 100) + '%' : '0' }, title: `Cache/Buffers ${fmtSize(memCache)}` }));
   root.appendChild(h('div', { class: 'dk-cards' },
-    card('CPU', pct(cpu.total), `user ${pct(cpu.user)} · system ${pct(cpu.system)} · iowait ${pct(cpu.iowait)}${cpu.steal ? ` · steal ${pct(cpu.steal)}` : ''}`,
-      spark(hs.cpu, { max: 100 }), h('div', { class: 'mon-cores' }, cpu.cores.map((c, i) => h('div', { class: 'mon-core', title: `cpu${i}: ${pct(c)}` }, h('span', { class: level(c || 0), style: { height: Math.max(2, c || 0) + '%' } }))))),
-    card('Memory', pct(memRatio), `${fmtSize(memUsed)} of ${fmtSize(mem.total)} used · cache ${fmtSize(mem.cached + mem.buffers)}`,
-      spark(hs.mem, { max: 100, cls: 'mem' }), bar(memUsed, mem.total), h('div', { class: 'dk-sub' }, mem.swapTotal ? `swap ${fmtSize(mem.swapUsed)} of ${fmtSize(mem.swapTotal)}` : 'no swap')),
-    card('Disk I/O', rate(sum(snap.disks, 'readBps') + sum(snap.disks, 'writeBps')), `read ${rate(sum(snap.disks, 'readBps'))} · write ${rate(sum(snap.disks, 'writeBps'))}`,
+    card('CPU', h('span', { class: level(cpu.total || 0) }, pct(cpu.total)),
+      `user ${pct(cpu.user)} · sys ${pct(cpu.system)} · iowait ${pct(cpu.iowait)}${cpu.steal ? ` · steal ${pct(cpu.steal)}` : ''}`,
+      spark(hs.cpu, { max: 100 }),
+      h('div', { class: 'mon-cores' }, cpu.cores.map((c, i) => h('div', { class: 'mon-core', title: `cpu${i}: ${pct(c)}` }, h('span', { class: level(c || 0), style: { height: Math.max(2, c || 0) + '%' } }))))),
+    card('Memory', h('span', { class: level(memRatio) }, pct(memRatio)),
+      `${fmtSize(memUsed)} / ${fmtSize(mem.total)} · cache ${fmtSize(memCache)}`,
+      spark(hs.mem, { max: 100, cls: 'mem' }),
+      memStacked,
+      h('div', { class: 'dk-sub' }, mem.swapTotal ? `swap ${fmtSize(mem.swapUsed)} / ${fmtSize(mem.swapTotal)}` : 'no swap')),
+    card('Disk I/O', rate(sum(snap.disks, 'readBps') + sum(snap.disks, 'writeBps')),
+      `read ${rate(sum(snap.disks, 'readBps'))} · write ${rate(sum(snap.disks, 'writeBps'))}`,
       spark(hs.dr.map((v, i) => v + (hs.dw[i] || 0)), { cls: 'io' })),
-    card('Network I/O', rate(sum(snap.net, 'rxBps') + sum(snap.net, 'txBps')), `in ${rate(sum(snap.net, 'rxBps'))} · out ${rate(sum(snap.net, 'txBps'))}`,
+    card('Network I/O', rate(sum(snap.net, 'rxBps') + sum(snap.net, 'txBps')),
+      `in ${rate(sum(snap.net, 'rxBps'))} · out ${rate(sum(snap.net, 'txBps'))}`,
       spark(hs.rx.map((v, i) => v + (hs.tx[i] || 0)), { cls: 'net' }))));
 
-  // Basic information.
-  const kv = (k, v) => (v ? [h('dt', null, k), h('dd', null, v)] : []);
-  root.appendChild(h('h3', { class: 'mon-h' }, 'Basic information'));
-  root.appendChild(h('dl', { class: 'mon-info' },
-    ...kv('Host', info.hostname), ...kv('System', info.os), ...kv('Kernel', info.kernel), ...kv('Architecture', info.arch),
-    ...kv('CPU', info.cpuModel ? `${info.cpuModel}${info.cores ? ` · ${info.cores} logical cores` : ''}` : info.cores ? `${info.cores} logical cores` : ''),
-    ...kv('Uptime', fmtUptime(info.uptime)), ...kv('Load average', `${loadTxt}  (1 / 5 / 15 min)`),
-    ...kv('Tasks', `${snap.procs.total} processes${info.running ? ` · ${info.running[0]} running of ${info.running[1]} threads` : ''}`), ...kv('Logged in as', info.user)));
+  // System information as a compact 3-column grid inside a full-width card
+  const infoRows = [
+    ['Host', info.hostname],
+    ['System', info.os],
+    ['Kernel', info.kernel],
+    ['Architecture', info.arch],
+    ['CPU', info.cpuModel ? `${info.cpuModel}${info.cores ? ` (${info.cores} logical cores)` : ''}` : info.cores ? `${info.cores} logical cores` : ''],
+    ['Uptime', fmtUptime(info.uptime)],
+    ['Load average', `${loadTxt}  (1 / 5 / 15 min)`],
+    ['Tasks', `${snap.procs.total} processes${info.running ? ` · ${info.running[0]} running of ${info.running[1]} threads` : ''}`],
+    ['Logged in as', info.user],
+  ].filter(([, v]) => v);
+  const sysPanel = panel('System information', h('div', { class: 'mon-sys-grid' },
+    infoRows.map(([k, v]) => h('div', { class: 'mon-sys-item' },
+      h('span', { class: 'mon-sys-k' }, k),
+      h('span', { class: 'mon-sys-v mono', title: v }, v)))));
 
-  // Disk usage per mount point.
-  const mounts = snap.mounts.filter((m) => view.allMounts || !/^(\/boot|\/snap|\/var\/lib\/(docker|containers|snapd))(\/|$)/.test(m.mount));
-  root.appendChild(h('h3', { class: 'mon-h' }, 'Disk usage',
-    h('label', { class: 'row mon-opt' }, h('input', { type: 'checkbox', checked: view.allMounts, onchange: (e) => { view.allMounts = e.target.checked; draw(); } }), 'show all mounts')));
-  root.appendChild(mounts.length
-    ? h('table', { class: 'dk-table mon-table' },
-      h('thead', null, h('tr', null, ...['Mount point', 'Volume', 'Type', 'Size', 'Used', 'Free', 'Use'].map((t, i) => h('th', { class: i >= 3 && i < 6 ? 'num' : '' }, t)))),
+  const countLabel = (shown, total) => (shown < total ? `${shown} of ${total}` : `${total}`);
+  const limitSel = (key, choices, label) => h('select', {
+    class: 'mon-limit',
+    title: `Number of ${label} shown`,
+    onchange: (e) => {
+      view.limits[key] = Number(e.target.value) || 0;
+      try { localStorage.setItem('monLimit:' + key, String(view.limits[key])); } catch {}
+      draw();
+    },
+  }, ...choices.map((n) => h('option', { value: n, selected: view.limits[key] === n }, n ? `Top ${n}` : 'All')));
+  const sliceLimit = (arr, key) => (view.limits[key] > 0 ? arr.slice(0, view.limits[key]) : arr);
+
+  // Disk usage per mount point (filterable, sortable & limited)
+  const mq = view.filters.mounts.trim().toLowerCase();
+  const baseMounts = snap.mounts.filter((m) => view.allMounts || !/^(\/boot|\/snap|\/var\/lib\/(docker|containers|snapd))(\/|$)/.test(m.mount));
+  const mountsMatched = sortBy(
+    baseMounts.filter((m) => !mq || m.mount.toLowerCase().includes(mq) || m.fs.toLowerCase().includes(mq) || m.type.toLowerCase().includes(mq)),
+    'mounts',
+    { mount: (m) => m.mount, fs: (m) => m.fs, type: (m) => m.type, total: (m) => m.total, used: (m) => m.used, free: (m) => m.free, pct: (m) => m.pct },
+    (a, b) => a.mount.localeCompare(b.mount),
+  );
+  const mounts = sliceLimit(mountsMatched, 'mounts');
+  const mountsPanel = panel(baseMounts.length ? `Disk usage (${countLabel(mounts.length, baseMounts.length)})` : 'Disk usage', mounts.length
+    ? h('table', { class: 'mon-table' },
+      h('thead', null, h('tr', null,
+        sortTh('mounts', 'Mount point', 'mount', 1), sortTh('mounts', 'Volume', 'fs', 1), sortTh('mounts', 'Type', 'type', 1),
+        sortTh('mounts', 'Size', 'total', -1, 'num'), sortTh('mounts', 'Used', 'used', -1, 'num'), sortTh('mounts', 'Free', 'free', -1, 'num'),
+        sortTh('mounts', 'Use', 'pct', -1))),
       h('tbody', null, mounts.map((m) => h('tr', null,
         h('td', { class: 'mono' }, m.mount), h('td', { class: 'mono muted' }, m.fs), h('td', { class: 'muted' }, m.type),
         h('td', { class: 'num' }, fmtSize(m.total)), h('td', { class: 'num' }, fmtSize(m.used)), h('td', { class: 'num' }, fmtSize(m.free)),
-        h('td', { class: 'mon-use' }, h('div', { class: 'row' }, h('span', { class: 'mon-pct' }, m.pct + '%'), bar(m.used, m.total, level(m.pct))))))))
-    : h('div', { class: 'muted' }, 'Reading mounts…'));
+        h('td', { class: 'mon-use' }, h('div', { class: 'row' }, h('span', { class: 'mon-pct ' + level(m.pct) }, m.pct + '%'), bar(m.used, m.total, level(m.pct))))))))
+    : h('div', { class: 'mon-empty muted' }, baseMounts.length ? 'No mount matches.' : 'Reading mounts…'),
+  h('div', { class: 'row', style: { gap: '8px' } },
+    h('label', { class: 'row mon-opt' }, h('input', { type: 'checkbox', checked: view.allMounts, onchange: (e) => { view.allMounts = e.target.checked; draw(); } }), 'Show all'),
+    limitSel('mounts', [5, 10, 20, 0], 'mounts'),
+    filterInput('mounts', 'Filter mounts…')));
 
-  // Disk I/O and network per device.
-  root.appendChild(h('h3', { class: 'mon-h' }, 'Disk I/O'));
-  root.appendChild(snap.disks.length
-    ? h('table', { class: 'dk-table mon-table' },
-      h('thead', null, h('tr', null, h('th', null, 'Device'), ...['Read', 'Write', 'Read IOPS', 'Write IOPS', 'Busy'].map((t) => h('th', { class: 'num' }, t)))),
-      h('tbody', null, snap.disks.map((d) => h('tr', null,
+  // Disk I/O (filterable, sortable & limited)
+  const dq = view.filters.disks.trim().toLowerCase();
+  const disksMatched = sortBy(
+    snap.disks.filter((d) => !dq || d.name.toLowerCase().includes(dq)),
+    'disks',
+    { name: (d) => d.name, readBps: (d) => d.readBps, writeBps: (d) => d.writeBps, readIops: (d) => d.readIops, writeIops: (d) => d.writeIops, util: (d) => d.util },
+    (a, b) => a.name.localeCompare(b.name),
+  );
+  const disks = sliceLimit(disksMatched, 'disks');
+  const diskIoPanel = panel(snap.disks.length ? `Disk I/O (${countLabel(disks.length, snap.disks.length)})` : 'Disk I/O', disks.length
+    ? h('table', { class: 'mon-table' },
+      h('thead', null, h('tr', null,
+        sortTh('disks', 'Device', 'name', 1), sortTh('disks', 'Read', 'readBps', -1, 'num'), sortTh('disks', 'Write', 'writeBps', -1, 'num'),
+        sortTh('disks', 'R IOPS', 'readIops', -1, 'num'), sortTh('disks', 'W IOPS', 'writeIops', -1, 'num'), sortTh('disks', 'Busy', 'util', -1, 'num'))),
+      h('tbody', null, disks.map((d) => h('tr', null,
         h('td', { class: 'mono' }, d.name), h('td', { class: 'num' }, rate(d.readBps)), h('td', { class: 'num' }, rate(d.writeBps)),
-        h('td', { class: 'num' }, d.readIops == null ? '–' : Math.round(d.readIops)), h('td', { class: 'num' }, d.writeIops == null ? '–' : Math.round(d.writeIops)),
-        h('td', { class: 'mon-use' }, h('div', { class: 'row' }, h('span', { class: 'mon-pct' }, pct(d.util)), bar(d.util || 0, 100, level(d.util || 0))))))))
-    : h('div', { class: 'muted' }, 'No block devices reported by this machine.'));
+        h('td', { class: 'num muted' }, d.readIops == null ? '–' : Math.round(d.readIops)), h('td', { class: 'num muted' }, d.writeIops == null ? '–' : Math.round(d.writeIops)),
+        h('td', { class: 'mon-use' }, h('div', { class: 'row' }, h('span', { class: 'mon-pct ' + level(d.util || 0) }, pct(d.util)), bar(d.util || 0, 100, level(d.util || 0))))))))
+    : h('div', { class: 'mon-empty muted' }, snap.disks.length ? 'No device matches.' : 'No block devices reported by this machine.'),
+  h('div', { class: 'row', style: { gap: '6px' } },
+    limitSel('disks', [5, 10, 20, 0], 'devices'),
+    filterInput('disks', 'Filter devices…')));
 
-  root.appendChild(h('h3', { class: 'mon-h' }, 'Network I/O'));
-  root.appendChild(snap.net.length
-    ? h('table', { class: 'dk-table mon-table' },
-      h('thead', null, h('tr', null, h('th', null, 'Interface'), ...['In', 'Out', 'Received total', 'Sent total'].map((t) => h('th', { class: 'num' }, t)))),
-      h('tbody', null, snap.net.map((n) => h('tr', null,
+  // Network I/O (filterable, sortable & limited)
+  const nq = view.filters.net.trim().toLowerCase();
+  const netsMatched = sortBy(
+    snap.net.filter((n) => !nq || n.name.toLowerCase().includes(nq)),
+    'net',
+    { name: (n) => n.name, rxBps: (n) => n.rxBps, txBps: (n) => n.txBps, rxTotal: (n) => n.rxTotal, txTotal: (n) => n.txTotal },
+    (a, b) => a.name.localeCompare(b.name),
+  );
+  const nets = sliceLimit(netsMatched, 'net');
+  const netIoPanel = panel(snap.net.length ? `Network I/O (${countLabel(nets.length, snap.net.length)})` : 'Network I/O', nets.length
+    ? h('table', { class: 'mon-table' },
+      h('thead', null, h('tr', null,
+        sortTh('net', 'Interface', 'name', 1), sortTh('net', 'In', 'rxBps', -1, 'num'), sortTh('net', 'Out', 'txBps', -1, 'num'),
+        sortTh('net', 'Rx total', 'rxTotal', -1, 'num'), sortTh('net', 'Tx total', 'txTotal', -1, 'num'))),
+      h('tbody', null, nets.map((n) => h('tr', null,
         h('td', { class: 'mono' }, n.name), h('td', { class: 'num' }, rate(n.rxBps)), h('td', { class: 'num' }, rate(n.txBps)),
         h('td', { class: 'num muted' }, fmtSize(n.rxTotal)), h('td', { class: 'num muted' }, fmtSize(n.txTotal))))))
-    : h('div', { class: 'muted' }, 'No network interfaces.'));
+    : h('div', { class: 'mon-empty muted' }, snap.net.length ? 'No interface matches.' : 'No network interfaces.'),
+  h('div', { class: 'row', style: { gap: '6px' } },
+    limitSel('net', [5, 10, 20, 0], 'interfaces'),
+    filterInput('net', 'Filter interfaces…')));
 
-  // Programs.
-  const f = view.filter.trim().toLowerCase();
-  const val = SORT_VALUE[view.sort.key] || SORT_VALUE.cpu;
-  const rows = snap.procs.list
-    .filter((r) => !f || r.cmd.toLowerCase().includes(f) || r.user.toLowerCase().includes(f) || String(r.pid) === f)
-    .sort((a, b) => {
-      const x = val(a);
-      const y = val(b);
-      if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1;
-      return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y))) * view.sort.dir || a.pid - b.pid;
-    })
-    .slice(0, 100);
-  const filter = h('input', { class: 'mon-filter', placeholder: 'Filter by command, user or PID', value: view.filter, oninput: (e) => { view.filter = e.target.value; draw(); } });
-  root.appendChild(h('h3', { class: 'mon-h' }, `Programs (${snap.procs.total})`, filter));
-  root.appendChild(h('table', { class: 'dk-table mon-table mon-procs' },
-    h('thead', null, h('tr', null, sortTh('PID', 'pid', 1), sortTh('User', 'user', 1), sortTh('CPU', 'cpu'), sortTh('Memory', 'mem'), sortTh('Threads', 'threads'), sortTh('Command', 'cmd', 1))),
-    h('tbody', null, rows.map((r) => h('tr', { class: r.state === 'Z' ? 'dk-stopped' : '' },
-      h('td', { class: 'mono' }, r.pid), h('td', { class: 'muted' }, r.user), h('td', { class: 'num' }, pct(r.cpu)),
-      h('td', { class: 'num', title: r.memPct == null ? '' : pct(r.memPct) + ' of memory' }, fmtSize(r.mem)), h('td', { class: 'num' }, r.threads || ''),
-      h('td', { class: 'mono mon-cmd', title: r.cmd }, r.cmd))))));
-  if (!rows.length) root.appendChild(h('div', { class: 'muted' }, 'No program matches.'));
+  // Programs (limit + filter + sort)
+  const pq = view.filters.procs.trim().toLowerCase();
+  const matched = sortBy(
+    snap.procs.list.filter((r) => !pq || r.cmd.toLowerCase().includes(pq) || r.user.toLowerCase().includes(pq) || String(r.pid) === pq),
+    'procs',
+    { pid: (r) => r.pid, user: (r) => r.user, cpu: (r) => r.cpu, mem: (r) => r.mem, threads: (r) => r.threads, cmd: (r) => r.cmd },
+    (a, b) => a.pid - b.pid,
+  );
+  const rows = sliceLimit(matched, 'procs');
+  const procsPanel = panel(`Programs (${countLabel(rows.length, snap.procs.total)})`,
+    rows.length
+      ? h('table', { class: 'mon-table mon-procs' },
+        h('thead', null, h('tr', null,
+          sortTh('procs', 'PID', 'pid', 1), sortTh('procs', 'User', 'user', 1), sortTh('procs', 'CPU', 'cpu', -1, 'num'),
+          sortTh('procs', 'Memory', 'mem', -1, 'num'), sortTh('procs', 'Threads', 'threads', -1, 'num'), sortTh('procs', 'Command', 'cmd', 1))),
+        h('tbody', null, rows.map((r) => h('tr', { class: r.state === 'Z' ? 'dk-stopped' : '' },
+          h('td', { class: 'mono muted' }, r.pid),
+          h('td', { class: 'muted' }, r.user),
+          h('td', { class: 'num ' + level(r.cpu || 0) }, pct(r.cpu)),
+          h('td', { class: 'num ' + level(r.memPct || 0), title: r.memPct == null ? '' : pct(r.memPct) + ' of memory' }, fmtSize(r.mem)),
+          h('td', { class: 'num muted' }, r.threads || ''),
+          h('td', { class: 'mono mon-cmd', title: r.cmd }, r.cmd)))))
+      : h('div', { class: 'mon-empty muted' }, 'No program matches.'),
+    h('div', { class: 'row', style: { gap: '6px' } }, limitSel('procs', [10, 20, 50, 100, 0], 'processes'), filterInput('procs', 'Filter by command, user or PID…', 'mon-filter-lg')));
+
+  root.append(sysPanel, mountsPanel, diskIoPanel, netIoPanel, procsPanel);
 
   root.scrollTop = scroll;
-  if (focus) { const n = root.querySelector('.mon-filter'); if (n) { n.focus(); try { n.setSelectionRange(caret[0], caret[1]); } catch {} } }
+  if (focusKey) { const n = root.querySelector(`.mon-filter[data-filter="${focusKey}"]`); if (n) { n.focus(); try { n.setSelectionRange(caret[0], caret[1]); } catch {} } }
 }

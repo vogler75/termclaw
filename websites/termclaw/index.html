@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TermClaw — A workspace for remote coding agents</title>
+<meta name="description" content="Run AI coding agents across SSH, WSL, and local machines. Manage remote Docker hosts, browse files, review Git changes, and direct shared sessions through MCP.">
+<meta property="og:title" content="TermClaw — Your agents. One workspace."><meta property="og:description" content="An open-source workspace for coding agents and the machines they run on."><meta property="og:type" content="website">
+<meta name="theme-color" content="#09182a"><link rel="icon" href="assets/termclaw.svg" type="image/svg+xml">
+<link rel="preload" href="assets/inter.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="style.css"><script src="site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+<symbol id="mark" viewBox="20 22 218 214"><path d="M50 84l54 44-54 44" fill="none" stroke="currentColor" stroke-width="23" stroke-linecap="round" stroke-linejoin="round"/><path fill="currentColor" d="M150 48c24 50 14 118-26 162 10-50 14-106 26-162zm34-8c24 54 14 128-28 176 10-52 15-114 28-176zm32 12c22 48 14 110-24 154 9-48 13-100 24-154z"/></symbol>
+<symbol id="download-icon" viewBox="0 0 24 24"><path d="M12 3v11m-5-4.5 5 5 5-5M4 16v4h16v-4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="git-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .9a11.1 11.1 0 0 0-3.5 21.65c.55.1.76-.23.76-.53v-2.1c-3.09.66-3.75-1.32-3.75-1.32-.5-1.28-1.23-1.62-1.23-1.62-1-.69.08-.67.08-.67 1.1.08 1.7 1.14 1.7 1.14.99 1.7 2.59 1.2 3.23.92.1-.72.39-1.2.7-1.48-2.47-.28-5.06-1.23-5.06-5.49 0-1.22.43-2.22 1.14-3-.11-.28-.49-1.41.11-2.95 0 0 .93-.31 3.05 1.14a10.5 10.5 0 0 1 5.54 0c2.12-1.45 3.05-1.14 3.05-1.14.6 1.54.22 2.67.11 2.95.72.78 1.14 1.78 1.14 3 0 4.27-2.6 5.21-5.08 5.49.4.34.75 1.02.75 2.06v3.04c0 .3.2.64.77.53A11.1 11.1 0 0 0 12 .9Z"/></symbol>
+<symbol id="play-icon" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z" fill="currentColor"/></symbol>
+<symbol id="expand" viewBox="0 0 24 24"><path d="M4 10V4h6m4 0h6v6m0 4v6h-6m-4 0H4v-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+</svg>
+<div class="mast">
+<header class="wrap nav">
+<a class="brand" href="#main" aria-label="TermClaw home"><svg aria-hidden="true"><use href="#mark"/></svg>TermClaw</a>
+<nav aria-label="Main navigation"><a href="#workspace">Workspace</a><a href="#film">Walkthrough</a><a class="source" href="https://github.com/vogler75/termclaw"><svg aria-hidden="true"><use href="#git-icon"/></svg> GitHub</a><a class="nav-dl" href="#download">Download</a></nav>
+</header></div>
+<main id="main"><div class="mast">
+<section class="wrap hero" aria-labelledby="intro">
+<div class="hero-copy"><p class="eyebrow"><span class="dash"></span> Open-source agent workspace</p>
+<h1 id="intro">Your agents.<br><em>One workspace.</em></h1>
+<p class="lede">Run coding agents side by side across SSH, WSL, and local machines. Pick up their sessions in a browser or direct them from your phone.</p>
+<div class="hero-actions"><a class="btn primary" href="#download"><svg aria-hidden="true"><use href="#download-icon"/></svg>Download TermClaw</a><a class="btn outline" href="#film"><svg aria-hidden="true"><use href="#play-icon"/></svg>Watch the film</a></div>
+<p class="platforms">Windows <span> / </span> macOS <span> / </span> MIT license</p></div>
+<picture class="hero-art"><img src="assets/host-stack.webp" width="1520" height="1040" fetchpriority="high" alt="Three stacked remote hosts labelled build-01, review-02, and edge-03"></picture>
+</section>
+</div>
+<div class="compat"><div class="wrap compat-inner"><span class="compat-label">Coding agents</span><div><b>Claude Code</b><b>Codex</b><b>OpenCode</b><b>GitHub Copilot</b><b>Cursor</b><span>+ more</span></div></div></div>
+<section class="workspace wrap section" id="workspace" aria-labelledby="workspace-title">
+<p class="eyebrow dark"><span class="dash"></span> Inside TermClaw</p>
+<h2 id="workspace-title">Explore the workspace.</h2>
+<p class="intro-text">Follow a checkout service across three development hosts. Select a tool to see what you can do on the project machine.</p>
+<div class="explorer">
+<div class="tool-tabs" aria-label="Workspace tools"><a href="#session-panel" data-tool="sessions" class="selected"><i aria-hidden="true">›_</i> Sessions</a><a href="#docker-panel" data-tool="docker"><i aria-hidden="true">▦</i> Docker</a><a href="#files-panel" data-tool="files"><i aria-hidden="true">▱</i> Files</a><a href="#git-panel" data-tool="git"><i aria-hidden="true">⑂</i> Git</a><a href="#monitor-panel" data-tool="monitor"><i aria-hidden="true">∿</i> Monitor</a></div>
+<div class="panel" id="session-panel" data-panel="sessions"><div class="panel-text"><p class="eyebrow">SSH sessions</p><h3>Three hosts,<br>one project.</h3><p>Tile a developer, a reviewer, and the worker logs side by side. Each terminal can keep running in tmux when its SSH connection drops.</p></div><button class="shot" aria-label="Enlarge the SSH sessions screenshot"><img src="assets/sessions.webp" alt="TermClaw tiling developer, reviewer, and worker log terminals on three SSH hosts" loading="lazy"><span><svg><use href="#expand"/></svg></span></button></div>
+<div class="panel" id="docker-panel" data-panel="docker"><div class="panel-text"><p class="eyebrow">Remote Docker</p><h3>Manage Docker<br>on the host.</h3><p>Reach the remote Docker Engine over the project’s SSH connection. Sort containers by CPU, stream logs, open a shell, or restart one worker while the other containers keep running.</p></div><button class="shot" aria-label="Enlarge the remote Docker dashboard"><img src="assets/docker.webp" alt="Remote Docker containers sorted by CPU with controls to restart, open logs, or start a shell" loading="lazy"><span><svg><use href="#expand"/></svg></span></button></div>
+<div class="panel" id="files-panel" data-panel="files"><div class="panel-text"><p class="eyebrow">Remote file browser</p><h3>Work with files<br>in both directions.</h3><p>Browse remote folders, download a report, and upload a runbook. Preview code, JSON, images, and Markdown, or edit a text file and save it back to the host.</p></div><button class="shot" aria-label="Enlarge the remote file browser"><img src="assets/files.webp" alt="Remote reports folder with a Markdown runbook in split editing and preview mode" loading="lazy"><span><svg><use href="#expand"/></svg></span></button></div>
+<div class="panel" id="git-panel" data-panel="git"><div class="panel-text"><p class="eyebrow">Git integration</p><h3>Review changes<br>where they run.</h3><p>Discover repositories, inspect diffs, choose files for a commit, and push from the project machine. Follow branches, history, and pull request checks from the same tab.</p></div><button class="shot" aria-label="Enlarge the Git view"><img src="assets/git.webp" alt="Git changes, a worker configuration diff and a commit ready for review" loading="lazy"><span><svg><use href="#expand"/></svg></span></button></div>
+<div class="panel" id="monitor-panel" data-panel="monitor"><div class="panel-text"><p class="eyebrow">Linux host monitoring</p><h3>See what’s busy<br>on the machine.</h3><p>Compare CPU and memory with disk and network activity. Inspect mount points and sort running processes to find what is consuming the host.</p></div><button class="shot" aria-label="Enlarge the host monitor"><img src="assets/monitor.webp" alt="Linux host monitor displaying CPU, memory, disk and network throughput" loading="lazy"><span><svg><use href="#expand"/></svg></span></button></div>
+</div>
+</section>
+<section class="film-section" id="film" aria-labelledby="film-title"><div class="wrap section">
+<p class="eyebrow"><span class="dash"></span> Product walkthrough</p><h2 id="film-title">A worker spikes.<br><em>You’re away from your desk.</em></h2>
+<div class="cinema"><video id="player" controls playsinline preload="none" poster="assets/film-poster.jpg" aria-label="TermClaw product walkthrough"><source src="assets/termclaw-film.mp4" type="video/mp4"><track kind="captions" srclang="en" label="English" src="assets/english.vtt"><track kind="chapters" srclang="en" label="Chapters" src="assets/chapters.vtt">Your browser can <a href="assets/termclaw-film.mp4">download the film</a>.</video>
+<div class="chapter-list"><h3>Jump to a chapter</h3><a href="assets/termclaw-film.mp4#t=19.458" data-time="19.458"><time>00:19</time>Remote SSH sessions</a><a href="assets/termclaw-film.mp4#t=32.125" data-time="32.125"><time>00:32</time>Background &amp; browser</a><a href="assets/termclaw-film.mp4#t=43.250" data-time="43.250"><time>00:43</time>Mobile control via MCP</a><a href="assets/termclaw-film.mp4#t=85.125" data-time="85.125"><time>01:25</time>Orchestrators</a><a href="assets/termclaw-film.mp4#t=96.583" data-time="96.583"><time>01:36</time>Remote file transfers</a><a href="assets/termclaw-film.mp4#t=127.083" data-time="127.083"><time>02:07</time>Remote Docker management</a><a href="assets/termclaw-film.mp4#t=144.542" data-time="144.542"><time>02:24</time>Restart a remote container</a></div></div>
+<div class="film-meta"><span>03:23 &nbsp; / &nbsp; 1080p &nbsp; / &nbsp; English captions</span><a href="assets/termclaw-film.mp4" download="TermClaw.mp4">Download film</a></div>
+</div></section>
+<section class="wrap section agents" id="agents" aria-labelledby="agents-title"><p class="eyebrow dark"><span class="dash"></span> Agent coordination</p><h2 id="agents-title">Give each agent a job.</h2>
+<div class="agent-grid"><article><div class="icon-box" aria-hidden="true">›_</div><h3>Set up the team</h3><p>Install coding agents on the project machine and deploy skills and MCP servers. OpenCode and GitHub Copilot also offer structured ACP chats with tool calls, diffs, and permission requests.</p></article><article><div class="icon-box" aria-hidden="true">⌘</div><h3>Direct it from your phone</h3><p>Connect Claude or another compatible client to TermClaw’s MCP server. With a reachable endpoint and permission, it can find a shared session, send a prompt, and read the result.</p></article><article><div class="icon-box" aria-hidden="true">⑂</div><h3>Hand off the review</h3><p>Let an OpenCode orchestrator watch the developer and reviewer. A finished session can trigger the next prompt. Set a round limit, or schedule a run for later.</p></article></div>
+</section>
+<section class="download-section" id="download" aria-labelledby="dl-title"><div class="wrap download-inner"><div><p class="eyebrow"><span class="dash"></span> Open source · MIT license</p><h2 id="dl-title">Connect your first host.</h2><p>Download TermClaw for Windows x64 or macOS on Apple silicon.</p></div><a class="btn primary" href="https://github.com/vogler75/termclaw/releases/latest"><svg aria-hidden="true"><use href="#download-icon"/></svg>Get the latest release</a></div></section>
+</main>
+<footer><div class="wrap footer-inner"><a class="brand" href="#main"><svg aria-hidden="true"><use href="#mark"/></svg>TermClaw</a><span>© 2026 Andreas Vogler</span><div><a href="https://github.com/vogler75/termclaw#readme">Documentation</a><a href="https://github.com/vogler75/termclaw">GitHub</a><a href="LICENSE.txt">MIT license</a></div></div></footer>
+<dialog id="lightbox" aria-label="Workspace screenshot"><div class="dialog-head"><b id="shot-name">Workspace</b><button type="button" id="close-shot">Close</button></div><img alt="" id="large-shot"></dialog>
+</body></html>

@@ -307,8 +307,9 @@ function containersTable(ctx, p, snap, match) {
   const order = { running: 0, restarting: 1, paused: 2, created: 3, exited: 4, dead: 5 };
   const run = (c) => c.state === 'running';
   const list = sortRows(snap.containers
-    .filter((c) => shown(c.id, snap.updatedAt) && (view.stopped || c.state === 'running') && match(c.name, c.image, c.compose, c.status, c.ports.join(' '))), 'containers', {
+    .filter((c) => shown(c.id, snap.updatedAt) && (view.stopped || c.state === 'running') && match(c.id, c.name, c.image, c.compose, c.status, c.ports.join(' '))), 'containers', {
     name: (c) => c.name,
+    id: (c) => c.id,
     image: (c) => c.image,
     state: (c) => order[c.state] ?? 9,
     cpu: (c) => (run(c) ? c.cpu ?? 0 : null),
@@ -321,13 +322,14 @@ function containersTable(ctx, p, snap, match) {
   const stateCls = (s) => (s === 'running' ? 'dk-run' : s === 'paused' || s === 'restarting' ? 'dk-warn' : s === 'dead' ? 'error' : 'exited');
   return h('table', { class: 'list dk-table' },
     h('tr', null, selHeader(sel.containers, keys), h('th', null, ''),
-      sortTh('containers', 'Name', 'name'), sortTh('containers', 'Status', 'state'), sortTh('containers', 'Ports'),
+      sortTh('containers', 'Name', 'name'), sortTh('containers', 'ID', 'id'), sortTh('containers', 'Status', 'state'), sortTh('containers', 'Ports'),
       sortTh('containers', 'CPU', 'cpu', -1), sortTh('containers', 'Memory', 'mem', -1), sortTh('containers', 'Net I/O', 'net', -1),
       sortTh('containers', 'Created', 'created', -1), h('th', null, '')),
     list.map((c, i) => {
       const run = c.state === 'running';
       const paused = c.state === 'paused';
       const b = busy.get(c.id);
+      const shortId = String(c.id || '').slice(0, 12);
       const item = [{ id: c.id, name: c.name }];
       const act = (action, label, title) => h('button', { class: 'icon', title, 'aria-label': title, disabled: !!b, onclick: () => runBulk(p, 'container', action, item) }, label);
       const more = (e) => {
@@ -335,6 +337,7 @@ function containersTable(ctx, p, snap, match) {
         contextMenu(r.left, r.bottom + 2, [
           paused ? { label: 'Resume', action: () => runBulk(p, 'container', 'unpause', item) } : { label: 'Pause', action: () => runBulk(p, 'container', 'pause', item) },
           { label: 'Kill (SIGKILL)', action: () => runBulk(p, 'container', 'kill', item) },
+          { label: 'Copy container ID', action: () => { navigator.clipboard?.writeText(c.id); toast('Container ID copied'); } },
           '-',
           { label: 'Remove…', action: () => removeDialog(p, 'container', [c]) },
         ]);
@@ -343,6 +346,12 @@ function containersTable(ctx, p, snap, match) {
         selCell(sel.containers, keys, i, c.name),
         h('td', null, h('span', { class: 'dot ' + stateCls(c.state), title: c.state })),
         h('td', null, h('div', { class: 'dk-name' }, c.name, c.compose ? h('span', { class: 'tag', title: 'Compose project' }, c.compose) : null), h('div', { class: 'muted dk-image', title: c.image }, c.image)),
+        h('td', {
+          class: 'mono muted',
+          style: { cursor: 'pointer', whiteSpace: 'nowrap' },
+          title: `Click to copy full ID: ${c.id}`,
+          onclick: () => { navigator.clipboard?.writeText(c.id); toast(`Copied ${shortId}`); },
+        }, shortId),
         h('td', { class: 'muted' }, b ? h('span', { class: 'warn' }, b + '…') : c.status),
         h('td', { class: 'mono dk-ports' }, c.ports.map((x) => h('div', null, x))),
         h('td', { class: 'dk-cpu' }, run ? h('div', { class: 'row' }, spark(hh.c.get(c.id) || [], { w: 60, hgt: 18, floor: 5, cls: 'cpu' }), h('span', { class: 'mono' }, pct(c.cpu))) : ''),
@@ -415,7 +424,7 @@ function volumesTable(ctx, p, df, snap, match) {
         h('td', { class: 'mono dk-vol', title: v.name }, v.name, v.labels['com.docker.compose.project'] ? h('span', { class: 'tag' }, v.labels['com.docker.compose.project']) : null),
         h('td', { class: 'muted' }, v.driver),
         h('td', { class: 'mono' }, b ? h('span', { class: 'warn' }, b + '…') : v.size >= 0 ? fmtSize(v.size) : '?'),
-        h('td', null, cs.length ? cs.map((c) => h('div', { class: c.state === 'running' ? '' : 'muted' }, c.name)) : h('span', { class: 'muted' }, 'unused')),
+        h('td', null, cs.length ? cs.map((c) => h('div', { class: c.state === 'running' ? '' : 'muted', title: `${c.name} (${String(c.id || '').slice(0, 12)})` }, c.name)) : h('span', { class: 'muted' }, 'unused')),
         h('td', { class: 'muted dk-created', title: v.created ? new Date(v.created).toLocaleString() : '' }, v.created ? timeAgo(v.created) + ' ago' : ''),
         h('td', { class: 'mono muted dk-mount', title: v.mountpoint }, v.mountpoint),
         h('td', { class: 'dk-actions' },

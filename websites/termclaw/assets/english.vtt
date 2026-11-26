@@ -1,0 +1,297 @@
+WEBVTT
+
+1
+00:00:00.000 --> 00:00:02.580
+TermClaw is an open-source desktop app
+
+2
+00:00:02.580 --> 00:00:04.970
+for managing multiple
+remote terminal sessions.
+
+3
+00:00:05.260 --> 00:00:07.380
+Connect to different machines over SSH
+
+4
+00:00:07.380 --> 00:00:10.290
+and run AI coding agents
+in parallel across projects.
+
+5
+00:00:10.540 --> 00:00:13.450
+Review their changes, manage remote
+Docker containers,
+
+6
+00:00:13.640 --> 00:00:15.650
+or open the same workspace in a browser.
+
+7
+00:00:15.900 --> 00:00:18.450
+Let's follow a checkout worker
+stuck in a retry loop.
+
+8
+00:00:19.400 --> 00:00:22.910
+In TermClaw, the developer, the
+reviewer,
+
+9
+00:00:22.920 --> 00:00:26.270
+and the worker logs can each have their
+own SSH session.
+
+10
+00:00:26.620 --> 00:00:27.610
+Tile them together.
+
+11
+00:00:27.920 --> 00:00:31.030
+With tmux, a dropped connection doesn't
+interrupt the job.
+
+12
+00:00:32.500 --> 00:00:33.890
+Close the desktop window.
+
+13
+00:00:34.220 --> 00:00:36.550
+With background mode on, the sessions
+keep running.
+
+14
+00:00:36.700 --> 00:00:39.840
+Open the token-protected web interface
+and pick up the same work in a
+
+15
+00:00:39.840 --> 00:00:40.250
+browser.
+
+16
+00:00:40.540 --> 00:00:42.150
+You can even start TermClaw hidden.
+
+17
+00:00:43.280 --> 00:00:46.290
+From your phone, ask Claude to check the
+worker.
+
+18
+00:00:46.500 --> 00:00:50.710
+Its connector talks to TermClaw's MCP
+server, finds the shared session,
+
+19
+00:00:50.960 --> 00:00:53.750
+sends your request, and reads back the
+agent's findings.
+
+20
+00:00:54.000 --> 00:00:58.210
+Claude Code, Codex, and other MCP
+clients can use those same tools.
+
+21
+00:00:59.660 --> 00:01:01.770
+Need another agent on a remote machine?
+
+22
+00:01:02.040 --> 00:01:04.290
+Open the Agents menu and choose an
+installer.
+
+23
+00:01:04.520 --> 00:01:07.910
+TermClaw runs the official install
+command in that project's terminal.
+
+24
+00:01:08.360 --> 00:01:11.310
+Deploy the team's skills and MCP servers
+there, too.
+
+25
+00:01:12.820 --> 00:01:16.920
+OpenCode and GitHub Copilot also connect
+through the Agent Client
+
+26
+00:01:16.920 --> 00:01:17.430
+Protocol.
+
+27
+00:01:17.640 --> 00:01:21.500
+Open a chat, watch the tool calls
+arrive, inspect a proposed diff,
+
+28
+00:01:21.500 --> 00:01:23.890
+and answer a permission request in
+place.
+
+29
+00:01:25.160 --> 00:01:28.130
+Give an orchestrator a developer and a
+reviewer to watch.
+
+30
+00:01:28.480 --> 00:01:31.450
+When the developer finishes, its output
+goes to the coordinator.
+
+31
+00:01:31.680 --> 00:01:33.900
+The coordinator can ask the reviewer to
+check the change,
+
+32
+00:01:33.900 --> 00:01:35.470
+with a round limit you control.
+
+33
+00:01:36.660 --> 00:01:39.570
+Open Files and browse the remote
+machine.
+
+34
+00:01:40.080 --> 00:01:42.770
+Here, the checkout project has a reports
+folder.
+
+35
+00:01:42.960 --> 00:01:46.760
+Open it, preview the retry report, and
+download a copy to your computer.
+
+36
+00:01:46.760 --> 00:01:49.710
+Now upload the team's runbook into that
+same folder.
+
+37
+00:01:49.840 --> 00:01:53.220
+Open the Markdown preview, edit the
+handoff note, and save it back
+
+38
+00:01:53.220 --> 00:01:53.870
+to the host.
+
+39
+00:01:55.240 --> 00:01:56.390
+Now open Git.
+
+40
+00:01:56.780 --> 00:01:59.550
+Choose the repository, inspect the
+changed lines,
+
+41
+00:01:59.860 --> 00:02:01.910
+then select the files that belong in the
+commit.
+
+42
+00:02:02.100 --> 00:02:05.970
+Branches, history, and pull request
+checks are close at hand.
+
+43
+00:02:07.380 --> 00:02:10.790
+The checkout containers run on a
+different machine, edge-03.
+
+44
+00:02:11.380 --> 00:02:13.500
+Open Docker in its TermClaw project.
+
+45
+00:02:13.500 --> 00:02:18.320
+TermClaw uses the project's SSH
+connection to reach the Docker engine on
+
+46
+00:02:18.320 --> 00:02:19.250
+that Linux host.
+
+47
+00:02:19.520 --> 00:02:23.450
+Sort its containers by CPU and open the
+worker's live logs.
+
+48
+00:02:24.580 --> 00:02:27.890
+From your laptop, select Restart on the
+checkout worker.
+
+49
+00:02:28.300 --> 00:02:30.090
+Watch its status on the remote host.
+
+50
+00:02:30.480 --> 00:02:32.610
+The worker comes back up with a fresh
+uptime.
+
+51
+00:02:32.680 --> 00:02:34.850
+The API and cache keep running.
+
+52
+00:02:36.280 --> 00:02:40.390
+On that same remote Docker host, open a
+shell inside a container,
+
+53
+00:02:40.820 --> 00:02:44.670
+browse a volume read only, or manage
+several containers at once.
+
+54
+00:02:44.820 --> 00:02:48.550
+You can also clean up unused images and
+volumes over SSH.
+
+55
+00:02:49.680 --> 00:02:53.170
+Switch to Monitor to check the Linux
+host beneath those containers.
+
+56
+00:02:53.500 --> 00:02:56.390
+Compare CPU and memory with disk and
+network activity.
+
+57
+00:02:56.560 --> 00:02:59.370
+Sort the processes to see which one is
+consuming the machine.
+
+58
+00:03:00.520 --> 00:03:04.110
+TermClaw brings your remote sessions,
+browser access,
+
+59
+00:03:04.400 --> 00:03:06.010
+and mobile agent controls together.
+
+60
+00:03:06.300 --> 00:03:10.910
+Install agents, coordinate reviews, move
+files, inspect Git changes,
+
+61
+00:03:11.240 --> 00:03:14.270
+manage remote Docker hosts, and monitor
+your hosts.
+
+62
+00:03:14.480 --> 00:03:17.070
+It's open source under the MIT license.
+
+63
+00:03:17.360 --> 00:03:18.970
+Find TermClaw on GitHub.
