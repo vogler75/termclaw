@@ -334,10 +334,12 @@ function containersTable(ctx, p, snap, match) {
       const act = (action, label, title) => h('button', { class: 'icon', title, 'aria-label': title, disabled: !!b, onclick: () => runBulk(p, 'container', action, item) }, label);
       const more = (e) => {
         const r = e.currentTarget.getBoundingClientRect();
+        const vols = (c.mounts || []).filter((m) => m.type === 'volume' && m.name);
         contextMenu(r.left, r.bottom + 2, [
           paused ? { label: 'Resume', action: () => runBulk(p, 'container', 'unpause', item) } : { label: 'Pause', action: () => runBulk(p, 'container', 'pause', item) },
           { label: 'Kill (SIGKILL)', action: () => runBulk(p, 'container', 'kill', item) },
           { label: 'Copy container ID', action: () => { navigator.clipboard?.writeText(c.id); toast('Container ID copied'); } },
+          ...(vols.length ? [{ label: `Volumes (${vols.length})…`, action: () => containerVolumesDialog(ctx, p, c) }] : []),
           '-',
           { label: 'Remove…', action: () => removeDialog(p, 'container', [c]) },
         ]);
@@ -369,6 +371,72 @@ function containersTable(ctx, p, snap, match) {
     }));
 }
 
+function imageContainers(snap, im) {
+  return snap.containers.filter((c) => (c.imageId && c.imageId === im.id) || (im.tags && im.tags.includes(c.image)));
+}
+
+function usedByDialog(p, title, containers, mountFor = null) {
+  const stateCls = (s) => (s === 'running' ? 'dk-run' : s === 'paused' || s === 'restarting' ? 'dk-warn' : s === 'dead' ? 'error' : 'exited');
+  const jumpTo = (c) => {
+    document.querySelector('#modal-root .modal-close, #modal-root .modal-foot button')?.click();
+    view.sub = 'containers';
+    if (c.state !== 'running') view.stopped = true;
+    view.filter = String(c.id || '').slice(0, 12);
+    draw();
+  };
+  const body = containers.length
+    ? h('table', { class: 'list dk-table' },
+      h('thead', null, h('tr', null,
+        h('th', null, ''), h('th', null, 'Container'), h('th', null, 'ID'), h('th', null, 'Status'),
+        mountFor ? h('th', null, 'Mount path') : null,
+        h('th', null, ''))),
+      h('tbody', null, containers.map((c) => {
+        const shortId = String(c.id || '').slice(0, 12);
+        const run = c.state === 'running';
+        const mp = mountFor ? mountFor(c) : '';
+        return h('tr', { class: run ? '' : 'dk-stopped' },
+          h('td', null, h('span', { class: 'dot ' + stateCls(c.state), title: c.state })),
+          h('td', null, h('div', { class: 'dk-name' }, c.name), h('div', { class: 'muted dk-image', title: c.image }, c.image)),
+          h('td', {
+            class: 'mono muted',
+            style: { cursor: 'pointer', whiteSpace: 'nowrap' },
+            title: `Click to copy full ID: ${c.id}`,
+            onclick: () => { navigator.clipboard?.writeText(c.id); toast(`Copied ${shortId}`); },
+          }, shortId),
+          h('td', { class: 'muted' }, c.status || c.state),
+          mountFor ? h('td', { class: 'mono muted', title: mp }, mp) : null,
+          h('td', { class: 'dk-actions' },
+            h('button', { class: 'icon', title: 'Jump to this container in Containers tab', onclick: () => jumpTo(c) }, 'Show'),
+            run ? h('button', { class: 'icon', title: 'Stop container', onclick: () => runBulk(p, 'container', 'stop', [{ id: c.id, name: c.name }]) }, '■') : null,
+            h('button', { class: 'icon danger', title: 'Remove container', onclick: () => removeDialog(p, 'container', [c]) }, '✕')));
+      })))
+    : h('div', { class: 'muted' }, 'No containers are currently using this item.');
+  modal({ title, width: 'min(860px, calc(100vw - 40px))', body, okText: null, cancelText: 'Close' });
+}
+
+function containerVolumesDialog(ctx, p, c) {
+  const vols = (c.mounts || []).filter((m) => m.type === 'volume' && m.name);
+  const body = vols.length
+    ? h('table', { class: 'list dk-table' },
+      h('thead', null, h('tr', null, h('th', null, 'Volume'), h('th', null, 'Mount path'), h('th', null, ''))),
+      h('tbody', null, vols.map((m) => h('tr', null,
+        h('td', { class: 'mono', title: m.name }, m.name),
+        h('td', { class: 'mono muted', title: m.destination }, m.destination),
+        h('td', { class: 'dk-actions' },
+          h('button', { class: 'icon', title: 'Browse volume contents (read-only)', onclick: () => {
+            document.querySelector('#modal-root .modal-foot button')?.click();
+            openBrowser(ctx, `${p.id}@vol:${m.name}`, '/');
+          } }, 'Browse'),
+          h('button', { class: 'icon', title: 'Show in Volumes tab', onclick: () => {
+            document.querySelector('#modal-root .modal-foot button')?.click();
+            view.sub = 'volumes';
+            view.filter = m.name;
+            draw();
+          } }, 'Show'))))))
+    : h('div', { class: 'muted' }, 'This container does not mount any named Docker volumes.');
+  modal({ title: `Volumes used by ${c.name}`, width: 'min(760px, calc(100vw - 40px))', body, okText: null, cancelText: 'Close' });
+}
+
 function imagesTable(p, df, snap, match) {
   if (!df) return h('div', { class: 'muted', style: { padding: '16px 8px' } }, snap.df && snap.df.error ? snap.df.error : 'Loading disk usage…');
   const used = new Set(snap.containers.map((c) => c.image));
@@ -376,7 +444,7 @@ function imagesTable(p, df, snap, match) {
     name: (im) => im.tags[0] || '\uffff', // untagged last
     id: (im) => im.id.replace(/^sha256:/, ''),
     size: (im) => im.size,
-    containers: (im) => (im.containers < 0 ? null : im.containers),
+    containers: (im) => imageContainers(snap, im).length || (im.containers < 0 ? null : im.containers),
     created: (im) => im.created,
   }, (im) => im.tags[0] || im.id);
   const keys = list.map((im) => im.id);
@@ -387,15 +455,22 @@ function imagesTable(p, df, snap, match) {
       sortTh('images', 'Containers', 'containers', -1), sortTh('images', 'Created', 'created', -1), h('th', null, '')),
     list.map((im, i) => {
       const b = busy.get(im.id);
-      const item = { id: im.id, name: im.tags[0] || short(im.id), tags: im.tags, containers: im.containers };
+      const cs = imageContainers(snap, im);
+      const count = cs.length || (im.containers > 0 ? im.containers : 0);
+      const item = { id: im.id, name: im.tags[0] || short(im.id), tags: im.tags, containers: count };
+      const showUsers = () => usedByDialog(p, `Containers using ${item.name}`, cs);
       return h('tr', { class: sel.images.has(im.id) ? 'sel' : '' },
         selCell(sel.images, keys, i, item.name),
         h('td', null, im.tags.length ? im.tags.map((t) => h('div', { class: used.has(t) ? '' : 'muted' }, t)) : h('span', { class: 'muted' }, '<none>')),
         h('td', { class: 'mono muted' }, short(im.id)),
         h('td', { class: 'mono' }, b ? h('span', { class: 'warn' }, b + '…') : fmtSize(im.size)),
-        h('td', null, im.containers > 0 ? im.containers : h('span', { class: 'muted' }, im.containers < 0 ? '?' : 'unused')),
+        h('td', null, cs.length
+          ? h('button', { class: 'icon', title: 'Show containers using this image', onclick: showUsers }, `${cs.length} container${cs.length === 1 ? '' : 's'}`)
+          : count > 0 ? count : h('span', { class: 'muted' }, im.containers < 0 ? '?' : 'unused')),
         h('td', { class: 'muted dk-created', title: new Date(im.created).toLocaleString() }, timeAgo(im.created) + ' ago'),
-        h('td', { class: 'dk-actions' }, h('button', { class: 'icon', title: 'Remove image', 'aria-label': 'Remove', disabled: !!b, onclick: () => removeDialog(p, 'image', [item]) }, '✕')));
+        h('td', { class: 'dk-actions' },
+          cs.length ? h('button', { class: 'icon', title: 'Show containers using this image', onclick: showUsers }, 'Containers') : null,
+          h('button', { class: 'icon', title: 'Remove image', 'aria-label': 'Remove', disabled: !!b, onclick: () => removeDialog(p, 'image', [item]) }, '✕')));
     }));
 }
 
@@ -428,6 +503,7 @@ function volumesTable(ctx, p, df, snap, match) {
         h('td', { class: 'muted dk-created', title: v.created ? new Date(v.created).toLocaleString() : '' }, v.created ? timeAgo(v.created) + ' ago' : ''),
         h('td', { class: 'mono muted dk-mount', title: v.mountpoint }, v.mountpoint),
         h('td', { class: 'dk-actions' },
+          cs.length ? h('button', { class: 'icon', title: 'Show containers using this volume', onclick: () => usedByDialog(p, `Containers using volume ${v.name}`, cs, (c) => c.mounts.filter((m) => m.type === 'volume' && m.name === v.name).map((m) => m.destination).join(', ')) }, 'Containers') : null,
           h('button', { class: 'icon', title: 'Browse volume contents (read-only)', disabled: !!b, onclick: browse }, 'Browse'),
           h('button', { class: 'icon', title: 'Remove volume', 'aria-label': 'Remove', disabled: !!b, onclick: () => removeDialog(p, 'volume', [{ id: v.name, name: v.name }]) }, '✕')));
     }));

@@ -192,6 +192,7 @@ function containerInfo(c) {
     id: c.Id,
     name,
     image: c.Image,
+    imageId: c.ImageID || '',
     state: c.State, // created | running | paused | restarting | removing | exited | dead
     status: c.Status,
     created: c.Created * 1000,
